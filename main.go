@@ -41,6 +41,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/gdamore/tcell/v3"
 	"github.com/miekg/dns"
@@ -49,6 +50,14 @@ import (
 
 //go:embed dnsleaf.png
 var logoPNG []byte
+
+var proxyTransport = &http.Transport{
+	Proxy:                 nil,
+	DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+}
 
 type Record struct {
 	Host     string `json:"host"`
@@ -2049,6 +2058,38 @@ func (d *DNSLeaf) findUser(username string) (UserAuth, bool) {
 	return UserAuth{}, false
 }
 
+func validUsername(username string) bool {
+	if username == "" || len(username) > 64 {
+		return false
+	}
+	for _, r := range username {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func adminCount(users []UserAuth) int {
+	count := 0
+	for _, user := range users {
+		if user.Role == "admin" {
+			count++
+		}
+	}
+	return count
+}
+
+func (d *DNSLeaf) revokeUserSessions(username string) {
+	d.sessMu.Lock()
+	for token, session := range d.sessions {
+		if session.Username == username {
+			delete(d.sessions, token)
+		}
+	}
+	d.sessMu.Unlock()
+}
+
 func (d *DNSLeaf) sessionFromRequest(r *http.Request) (Session, bool) {
 	if !d.cfg.Auth.Enabled {
 		return Session{Username: "local", Role: "admin", Expires: time.Now().Add(time.Hour)}, true
@@ -2099,8 +2140,13 @@ func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, 64*1024*1024)
 		}
-		d.cfgMu.Lock()
-		defer d.cfgMu.Unlock()
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			d.cfgMu.RLock()
+			defer d.cfgMu.RUnlock()
+		} else {
+			d.cfgMu.Lock()
+			defer d.cfgMu.Unlock()
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -3722,23 +3768,37 @@ func (d *DNSLeaf) addStat(key string) {
 
 func (d *DNSLeaf) HandleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	transport := "dns"
+	client := ""
 	if w.RemoteAddr() != nil {
 		transport = w.RemoteAddr().Network()
+		client = w.RemoteAddr().String()
 	}
 	localAddr := ""
 	if w.LocalAddr() != nil {
 		localAddr = w.LocalAddr().String()
 	}
-	resp := d.resolveDNS(r, w.RemoteAddr().String(), localAddr, transport)
+	resp := d.resolveDNS(r, client, localAddr, transport)
+	if resp == nil {
+		resp = new(dns.Msg)
+		base := r
+		if base == nil {
+			base = new(dns.Msg)
+		}
+		resp.SetRcode(base, dns.RcodeServerFailure)
+	}
 	w.WriteMsg(resp)
 }
 
 func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *dns.Msg {
 	d.cfgMu.RLock()
 	defer d.cfgMu.RUnlock()
-	if len(r.Question) == 0 {
+	if r == nil || len(r.Question) != 1 {
 		m := new(dns.Msg)
-		m.SetRcode(r, dns.RcodeFormatError)
+		base := r
+		if base == nil {
+			base = new(dns.Msg)
+		}
+		m.SetRcode(base, dns.RcodeFormatError)
 		return m
 	}
 
@@ -3833,7 +3893,7 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 		return m
 	}
 
-	cacheKey := fmt.Sprintf("%s:%d:%d", qname, q.Qtype, q.Qclass)
+	cacheKey := fmt.Sprintf("%s:%d:%d", strings.ToLower(qname), q.Qtype, q.Qclass)
 	if cached := d.getCached(cacheKey); cached != nil {
 		if d.answerBlocked(cached) {
 			m := blockedResponse(r, qname, q.Qtype)
@@ -3845,6 +3905,9 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 			return m
 		}
 		cached.Id = r.Id
+		if len(cached.Question) > 0 {
+			cached.Question[0] = q
+		}
 		dur := time.Since(start)
 		d.addStat("cached")
 		d.trackClient(clientIP, "cached")
@@ -3931,6 +3994,7 @@ func (d *DNSLeaf) handleDoH(w http.ResponseWriter, r *http.Request) {
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(v)
 }
 
@@ -5944,7 +6008,7 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 		if role == "" {
 			role = "viewer"
 		}
-		if username == "" || body.Password == "" || (role != "admin" && role != "viewer") {
+		if !validUsername(username) || body.Password == "" || len(body.Password) > 4096 || (role != "admin" && role != "viewer") {
 			http.Error(w, "username, password, and valid role required", 400)
 			return
 		}
@@ -5958,7 +6022,11 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Role:         role,
 			CreatedAt:    time.Now().Format(time.RFC3339),
 		})
-		d.saveConfig()
+		if err := d.saveConfig(); err != nil {
+			d.cfg.Auth.Users = d.cfg.Auth.Users[:len(d.cfg.Auth.Users)-1]
+			http.Error(w, "could not save user", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, map[string]string{"username": username, "role": role})
 	case "PATCH":
 		var body struct {
@@ -5971,12 +6039,37 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		username := strings.TrimSpace(body.Username)
+		if !validUsername(username) {
+			http.Error(w, "valid username required", 400)
+			return
+		}
+		if body.NewUsername != "" && !validUsername(strings.TrimSpace(body.NewUsername)) {
+			http.Error(w, "new username is invalid", 400)
+			return
+		}
+		if body.Role != "" && body.Role != "admin" && body.Role != "viewer" {
+			http.Error(w, "role must be admin or viewer", 400)
+			return
+		}
+		if len(body.Password) > 4096 {
+			http.Error(w, "password is too long", 400)
+			return
+		}
 		for i, user := range d.cfg.Auth.Users {
-			if user.Username != body.Username {
+			if user.Username != username {
 				continue
 			}
 			newUsername := strings.TrimSpace(body.NewUsername)
-			if newUsername != "" && newUsername != body.Username {
+			newRole := user.Role
+			if body.Role != "" {
+				newRole = body.Role
+			}
+			if user.Role == "admin" && newRole != "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+				http.Error(w, "cannot demote the last administrator", 400)
+				return
+			}
+			if newUsername != "" && newUsername != username {
 				for _, existing := range d.cfg.Auth.Users {
 					if strings.EqualFold(existing.Username, newUsername) {
 						http.Error(w, "username already exists", 409)
@@ -5984,14 +6077,6 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				d.cfg.Auth.Users[i].Username = newUsername
-				d.sessMu.Lock()
-				for token, sess := range d.sessions {
-					if sess.Username == body.Username {
-						sess.Username = newUsername
-						d.sessions[token] = sess
-					}
-				}
-				d.sessMu.Unlock()
 			}
 			if body.Role == "admin" || body.Role == "viewer" {
 				d.cfg.Auth.Users[i].Role = body.Role
@@ -5999,8 +6084,14 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 			if body.Password != "" {
 				d.cfg.Auth.Users[i].PasswordHash = passwordHash(body.Password)
 			}
-			d.saveConfig()
-			writeJSON(w, map[string]string{"username": d.cfg.Auth.Users[i].Username, "role": d.cfg.Auth.Users[i].Role})
+			updated := d.cfg.Auth.Users[i]
+			if err := d.saveConfig(); err != nil {
+				d.cfg.Auth.Users[i] = user
+				http.Error(w, "could not save user", http.StatusInternalServerError)
+				return
+			}
+			d.revokeUserSessions(user.Username)
+			writeJSON(w, map[string]string{"username": updated.Username, "role": updated.Role})
 			return
 		}
 		http.Error(w, "user not found", 404)
@@ -6012,17 +6103,29 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if len(d.cfg.Auth.Users) <= 1 {
-			http.Error(w, "cannot remove the last user", 400)
-			return
-		}
+		username := strings.TrimSpace(body.Username)
 		for i, user := range d.cfg.Auth.Users {
-			if user.Username == body.Username {
-				d.cfg.Auth.Users = append(d.cfg.Auth.Users[:i], d.cfg.Auth.Users[i+1:]...)
-				d.saveConfig()
-				w.WriteHeader(204)
+			if user.Username != username {
+				continue
+			}
+			if len(d.cfg.Auth.Users) <= 1 {
+				http.Error(w, "cannot remove the last user", 400)
 				return
 			}
+			if user.Role == "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+				http.Error(w, "cannot remove the last administrator", 400)
+				return
+			}
+			users := append([]UserAuth(nil), d.cfg.Auth.Users...)
+			d.cfg.Auth.Users = append(d.cfg.Auth.Users[:i], d.cfg.Auth.Users[i+1:]...)
+			if err := d.saveConfig(); err != nil {
+				d.cfg.Auth.Users = users
+				http.Error(w, "could not save user", http.StatusInternalServerError)
+				return
+			}
+			d.revokeUserSessions(user.Username)
+			w.WriteHeader(204)
+			return
 		}
 		http.Error(w, "user not found", 404)
 	default:
@@ -6066,6 +6169,10 @@ func (d *DNSLeaf) handleCLI(args []string) bool {
 			fmt.Println("role must be admin or viewer")
 			return true
 		}
+		if !validUsername(args[2]) || args[3] == "" || len(args[3]) > 4096 {
+			fmt.Println("username and password are invalid")
+			return true
+		}
 		if _, ok := d.findUser(args[2]); ok {
 			fmt.Println("user already exists")
 			return true
@@ -6085,7 +6192,11 @@ func (d *DNSLeaf) handleCLI(args []string) bool {
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[2] {
 				d.cfg.Auth.Users[i].PasswordHash = passwordHash(args[3])
-				d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					fmt.Printf("save failed: %v\n", err)
+					return true
+				}
+				d.revokeUserSessions(user.Username)
 				fmt.Printf("reset password for %s\n", args[2])
 				return true
 			}
@@ -6098,8 +6209,17 @@ func (d *DNSLeaf) handleCLI(args []string) bool {
 		}
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[2] {
+				if user.Role == "admin" && args[3] != "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+					fmt.Println("cannot demote the last administrator")
+					return true
+				}
 				d.cfg.Auth.Users[i].Role = args[3]
-				d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					d.cfg.Auth.Users[i] = user
+					fmt.Printf("save failed: %v\n", err)
+					return true
+				}
+				d.revokeUserSessions(user.Username)
 				fmt.Printf("updated %s to %s\n", args[2], args[3])
 				return true
 			}
@@ -6110,14 +6230,24 @@ func (d *DNSLeaf) handleCLI(args []string) bool {
 			fmt.Println("usage: dnsleaf user remove <username>")
 			return true
 		}
-		if len(d.cfg.Auth.Users) <= 1 {
-			fmt.Println("cannot remove the last user")
-			return true
-		}
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[2] {
+				if len(d.cfg.Auth.Users) <= 1 {
+					fmt.Println("cannot remove the last user")
+					return true
+				}
+				if user.Role == "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+					fmt.Println("cannot remove the last administrator")
+					return true
+				}
+				users := append([]UserAuth(nil), d.cfg.Auth.Users...)
 				d.cfg.Auth.Users = append(d.cfg.Auth.Users[:i], d.cfg.Auth.Users[i+1:]...)
-				d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					d.cfg.Auth.Users = users
+					fmt.Printf("save failed: %v\n", err)
+					return true
+				}
+				d.revokeUserSessions(user.Username)
 				fmt.Printf("removed %s\n", args[2])
 				return true
 			}
@@ -6858,6 +6988,10 @@ func (ui *consoleUI) runUserCommand(args []string) {
 			ui.appendLog("role must be admin or viewer")
 			return
 		}
+		if !validUsername(args[1]) || args[2] == "" || len(args[2]) > 4096 {
+			ui.appendLog("username and password are invalid")
+			return
+		}
 		if _, ok := d.findUser(args[1]); ok {
 			ui.appendLog("user already exists")
 			return
@@ -6877,7 +7011,11 @@ func (ui *consoleUI) runUserCommand(args []string) {
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[1] {
 				d.cfg.Auth.Users[i].PasswordHash = passwordHash(args[2])
-				_ = d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					ui.appendLog(fmt.Sprintf("save failed: %v", err))
+					return
+				}
+				d.revokeUserSessions(user.Username)
 				ui.appendLog(fmt.Sprintf("reset password for %s", args[1]))
 				return
 			}
@@ -6890,8 +7028,17 @@ func (ui *consoleUI) runUserCommand(args []string) {
 		}
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[1] {
+				if user.Role == "admin" && args[2] != "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+					ui.appendLog("cannot demote the last administrator")
+					return
+				}
 				d.cfg.Auth.Users[i].Role = args[2]
-				_ = d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					d.cfg.Auth.Users[i] = user
+					ui.appendLog(fmt.Sprintf("save failed: %v", err))
+					return
+				}
+				d.revokeUserSessions(user.Username)
 				ui.appendLog(fmt.Sprintf("updated %s to %s", args[1], args[2]))
 				return
 			}
@@ -6902,14 +7049,24 @@ func (ui *consoleUI) runUserCommand(args []string) {
 			ui.appendLog("usage: user remove <username>")
 			return
 		}
-		if len(d.cfg.Auth.Users) <= 1 {
-			ui.appendLog("cannot remove the last user")
-			return
-		}
 		for i, user := range d.cfg.Auth.Users {
 			if user.Username == args[1] {
+				if len(d.cfg.Auth.Users) <= 1 {
+					ui.appendLog("cannot remove the last user")
+					return
+				}
+				if user.Role == "admin" && adminCount(d.cfg.Auth.Users) <= 1 {
+					ui.appendLog("cannot remove the last administrator")
+					return
+				}
+				users := append([]UserAuth(nil), d.cfg.Auth.Users...)
 				d.cfg.Auth.Users = append(d.cfg.Auth.Users[:i], d.cfg.Auth.Users[i+1:]...)
-				_ = d.saveConfig()
+				if err := d.saveConfig(); err != nil {
+					d.cfg.Auth.Users = users
+					ui.appendLog(fmt.Sprintf("save failed: %v", err))
+					return
+				}
+				d.revokeUserSessions(user.Username)
 				ui.appendLog(fmt.Sprintf("removed %s", args[1]))
 				return
 			}
@@ -7124,7 +7281,7 @@ func (d *DNSLeaf) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	target.Header.Del("Proxy-Connection")
 	target.Header.Del("Proxy-Authenticate")
 	target.Header.Del("Proxy-Authorization")
-	resp, err := http.DefaultTransport.RoundTrip(target)
+	resp, err := proxyTransport.RoundTrip(target)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -7173,6 +7330,7 @@ func (d *DNSLeaf) serveSOCKSProxy(addr string) error {
 
 func (d *DNSLeaf) handleSOCKSConn(conn net.Conn) {
 	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	clientIP := normalizeClientIP(conn.RemoteAddr().String())
 	d.cfgMu.RLock()
 	allowed := d.clientAllowed(clientIP)
@@ -7234,6 +7392,7 @@ func (d *DNSLeaf) handleSOCKSConn(conn net.Conn) {
 		return
 	}
 	defer target.Close()
+	_ = conn.SetDeadline(time.Time{})
 	conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 	copyBoth(&bufferedConn{Conn: conn, r: br}, target)
 }
