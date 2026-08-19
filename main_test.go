@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -168,6 +170,63 @@ func TestDomainRuleMatchingUsesBoundedCompiledRules(t *testing.T) {
 	d.ruleCacheMu.RUnlock()
 	if cacheSize > maxRuleCache {
 		t.Fatalf("compiled rule cache = %d, max %d", cacheSize, maxRuleCache)
+	}
+}
+
+func TestQueryLogPrivacyControls(t *testing.T) {
+	d := newTestLeaf(t)
+	d.cfg.AnonymizeClientIPs = true
+	d.addLog("192.0.2.44:53000", "192.0.2.1:53", "udp", "example.com.", "A", "forwarded", "192.0.2.10", time.Millisecond)
+	d.logMu.Lock()
+	if len(d.log) != 1 {
+		d.logMu.Unlock()
+		t.Fatal("query was not logged")
+	}
+	entry := d.log[0]
+	d.logMu.Unlock()
+	if entry.ClientIP != "192.0.2.0" || entry.Client != "192.0.2.0" || entry.LocalAddr != "" || entry.ClientMAC != "" {
+		t.Fatalf("query log was not anonymized: %#v", entry)
+	}
+	d.cfg.QueryLogEnabled = false
+	d.addLog("192.0.2.45:53000", "192.0.2.1:53", "udp", "private.example.", "A", "forwarded", "", time.Millisecond)
+	d.logMu.Lock()
+	logSize := len(d.log)
+	d.logMu.Unlock()
+	if logSize != 1 {
+		t.Fatalf("query logging disabled but log size became %d", logSize)
+	}
+}
+
+func TestMetricsAndBackupEndpoints(t *testing.T) {
+	d := newTestLeaf(t)
+	d.cfg.Auth.Enabled = false
+	d.stats.Queries = 3
+	d.stats.Blocked = 1
+	metrics := httptest.NewRecorder()
+	d.handleMetrics(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metrics.Code != http.StatusOK || !strings.Contains(metrics.Body.String(), "dnsleaf_queries_total 3") {
+		t.Fatalf("unexpected metrics response: %d %s", metrics.Code, metrics.Body.String())
+	}
+	if err := d.saveConfig(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := d.backupArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundConfig := false
+	for _, file := range archive.File {
+		if file.Name == "config.json" {
+			foundConfig = true
+			break
+		}
+	}
+	if !foundConfig {
+		t.Fatal("backup did not contain config.json")
 	}
 }
 

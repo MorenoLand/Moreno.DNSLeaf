@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -127,6 +128,15 @@ type QueryEntry struct {
 	Duration    int64  `json:"duration_ms"`
 }
 
+type AuditEntry struct {
+	Timestamp int64  `json:"ts"`
+	Time      string `json:"time"`
+	Username  string `json:"username"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Status    int    `json:"status"`
+}
+
 type ClientProfile struct {
 	Disabled        bool     `json:"disabled,omitempty"`
 	DisableBlocking bool     `json:"disable_blocking,omitempty"`
@@ -174,6 +184,7 @@ type UpstreamHealthConfig struct {
 type PersistentState struct {
 	Stats   Stats                            `json:"stats"`
 	Log     []QueryEntry                     `json:"log"`
+	Audit   []AuditEntry                     `json:"audit"`
 	Clients map[string]PersistentClientState `json:"clients"`
 }
 
@@ -217,6 +228,9 @@ type Config struct {
 	CacheSize          int                      `json:"cache_size"`
 	CacheTTL           int                      `json:"cache_ttl_seconds"`
 	StripECS           bool                     `json:"strip_ecs"`
+	QueryLogEnabled    bool                     `json:"query_log_enabled"`
+	QueryLogRetention  int                      `json:"query_log_retention_hours"`
+	AnonymizeClientIPs bool                     `json:"anonymize_client_ips"`
 	PortalHost         string                   `json:"portal_host"`
 	PortalIP           string                   `json:"portal_ip"`
 	LANOnly            bool                     `json:"lan_only"`
@@ -317,6 +331,8 @@ type DNSLeaf struct {
 	statsMu            sync.Mutex
 	log                []QueryEntry
 	logMu              sync.Mutex
+	audit              []AuditEntry
+	auditMu            sync.Mutex
 	clients            map[string]*clientState
 	clientsMu          sync.Mutex
 	sessions           map[string]Session
@@ -1528,6 +1544,9 @@ func defaultConfig() Config {
 		CacheSize:          1000,
 		CacheTTL:           300,
 		StripECS:           true,
+		QueryLogEnabled:    true,
+		QueryLogRetention:  168,
+		AnonymizeClientIPs: false,
 		PortalHost:         "dns.leaf",
 		PortalIP:           "127.0.0.1",
 		LANOnly:            true,
@@ -1727,6 +1746,12 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.CacheTTL < 0 || cfg.CacheTTL > maxCacheTTL {
 		add("cache_ttl_seconds", fmt.Sprintf("must be between 0 and %d", maxCacheTTL))
+	}
+	if cfg.QueryLogRetention < 0 || cfg.QueryLogRetention > 24*365 {
+		add("query_log_retention_hours", "must be between 0 and 8760")
+	}
+	if cfg.QueryLogEnabled && cfg.QueryLogRetention <= 0 {
+		add("query_log_retention_hours", "must be positive when query logging is enabled")
 	}
 	if !validDNSName(cfg.PortalHost) {
 		add("portal_host", "must be a valid DNS name")
@@ -2081,6 +2106,7 @@ func NewDNSLeaf(cfg Config, cfgPath string) *DNSLeaf {
 		gravityByList:      make(map[string][]uint32),
 		cache:              make(map[string]cacheEntry),
 		log:                make([]QueryEntry, 0, 200),
+		audit:              make([]AuditEntry, 0, 200),
 		clients:            make(map[string]*clientState),
 		sessions:           make(map[string]Session),
 		serverLog:          make([]string, 0, 200),
@@ -2196,6 +2222,22 @@ func (d *DNSLeaf) persistenceError() string {
 	return d.persistenceErr
 }
 
+func (d *DNSLeaf) trimQueryLogLocked(now time.Time) {
+	if d.cfg.QueryLogRetention > 0 {
+		cutoff := now.Add(-time.Duration(d.cfg.QueryLogRetention) * time.Hour).UnixMilli()
+		first := 0
+		for first < len(d.log) && d.log[first].Timestamp > 0 && d.log[first].Timestamp < cutoff {
+			first++
+		}
+		if first > 0 {
+			d.log = d.log[first:]
+		}
+	}
+	if len(d.log) > 200 {
+		d.log = d.log[len(d.log)-200:]
+	}
+}
+
 func (d *DNSLeaf) loadPersistentState() {
 	data, err := os.ReadFile(d.statePath)
 	if err != nil {
@@ -2215,6 +2257,13 @@ func (d *DNSLeaf) loadPersistentState() {
 		state.Log = state.Log[len(state.Log)-200:]
 	}
 	d.log = state.Log
+	d.logMu.Lock()
+	d.trimQueryLogLocked(time.Now())
+	d.logMu.Unlock()
+	if len(state.Audit) > 200 {
+		state.Audit = state.Audit[len(state.Audit)-200:]
+	}
+	d.audit = state.Audit
 	if state.Clients != nil {
 		d.clientsMu.Lock()
 		for ip, item := range state.Clients {
@@ -2246,6 +2295,10 @@ func (d *DNSLeaf) savePersistentState() error {
 	logCopy := make([]QueryEntry, len(d.log))
 	copy(logCopy, d.log)
 	d.logMu.Unlock()
+	d.auditMu.Lock()
+	auditCopy := make([]AuditEntry, len(d.audit))
+	copy(auditCopy, d.audit)
+	d.auditMu.Unlock()
 	d.clientsMu.Lock()
 	clientsCopy := make(map[string]PersistentClientState, len(d.clients))
 	for ip, item := range d.clients {
@@ -2267,7 +2320,7 @@ func (d *DNSLeaf) savePersistentState() error {
 		}
 	}
 	d.clientsMu.Unlock()
-	data, err := json.MarshalIndent(PersistentState{Stats: stats, Log: logCopy, Clients: clientsCopy}, "", "  ")
+	data, err := json.MarshalIndent(PersistentState{Stats: stats, Log: logCopy, Audit: auditCopy, Clients: clientsCopy}, "", "  ")
 	if err != nil {
 		d.setPersistenceError(err)
 		return err
@@ -2516,7 +2569,7 @@ func (d *DNSLeaf) requireAuth(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if r.URL.Path == "/api/users" && s.Role != "admin" {
+		if (r.URL.Path == "/api/users" || r.URL.Path == "/api/audit" || r.URL.Path == "/api/backup") && s.Role != "admin" {
 			http.Error(w, "admin role required", http.StatusForbidden)
 			return
 		}
@@ -2625,6 +2678,7 @@ func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 				return
 			}
 			d.clearCache()
+			d.addAudit(r, status)
 		}
 		buffered.flush(w)
 	})
@@ -3631,6 +3685,23 @@ func normalizeClientIP(addr string) string {
 	return host
 }
 
+func anonymizeClientIP(value string) string {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil {
+		return ""
+	}
+	if v4 := ip.To4(); v4 != nil {
+		copyIP := append(net.IP(nil), v4...)
+		copyIP[3] = 0
+		return copyIP.String()
+	}
+	copyIP := append(net.IP(nil), ip.To16()...)
+	for i := 8; i < len(copyIP); i++ {
+		copyIP[i] = 0
+	}
+	return copyIP.String()
+}
+
 func ipInList(ip string, list []string) bool {
 	parsed := net.ParseIP(ip)
 	for _, raw := range list {
@@ -4465,9 +4536,28 @@ func emptyNoErrorResponse(r *dns.Msg) *dns.Msg {
 
 func (d *DNSLeaf) addLog(client, localAddr, transport, domain, qtype, action, answers string, dur time.Duration, blockSource ...string) {
 	ip := normalizeClientIP(client)
-	name := d.clientName(ip)
-	mac, macStatus := lookupClientMAC(ip)
-	d.noteSource(ip, client, localAddr, transport, mac, macStatus)
+	if !d.cfg.QueryLogEnabled {
+		return
+	}
+	loggedIP := ip
+	loggedClient := client
+	loggedLocalAddr := localAddr
+	name := ""
+	mac := ""
+	macStatus := ""
+	if !d.cfg.AnonymizeClientIPs {
+		name = d.clientName(ip)
+		mac, macStatus = lookupClientMAC(ip)
+	}
+	if d.cfg.AnonymizeClientIPs {
+		loggedIP = anonymizeClientIP(ip)
+		loggedClient = loggedIP
+		loggedLocalAddr = ""
+		name = ""
+		mac = ""
+		macStatus = ""
+	}
+	d.noteSource(loggedIP, loggedClient, loggedLocalAddr, transport, mac, macStatus)
 	now := time.Now()
 	source := ""
 	if len(blockSource) > 0 {
@@ -4478,12 +4568,12 @@ func (d *DNSLeaf) addLog(client, localAddr, transport, domain, qtype, action, an
 	d.log = append(d.log, QueryEntry{
 		Timestamp:   now.UnixMilli(),
 		Time:        now.Format("15:04:05"),
-		Client:      client,
-		ClientIP:    ip,
+		Client:      loggedClient,
+		ClientIP:    loggedIP,
 		ClientName:  name,
 		ClientMAC:   mac,
 		MACStatus:   macStatus,
-		LocalAddr:   localAddr,
+		LocalAddr:   loggedLocalAddr,
 		Transport:   transport,
 		Domain:      domain,
 		Answers:     answers,
@@ -4492,9 +4582,25 @@ func (d *DNSLeaf) addLog(client, localAddr, transport, domain, qtype, action, an
 		BlockSource: source,
 		Duration:    dur.Milliseconds(),
 	})
-	if len(d.log) > 200 {
-		d.log = d.log[len(d.log)-200:]
+	d.trimQueryLogLocked(now)
+	d.requestPersistentSave()
+}
+
+func (d *DNSLeaf) addAudit(r *http.Request, status int) {
+	if r == nil || !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/login" || r.URL.Path == "/api/session" {
+		return
 	}
+	username := "anonymous"
+	if session, ok := d.sessionFromRequest(r); ok {
+		username = session.Username
+	}
+	now := time.Now()
+	d.auditMu.Lock()
+	d.audit = append(d.audit, AuditEntry{Timestamp: now.UnixMilli(), Time: now.Format(time.RFC3339), Username: username, Method: r.Method, Path: r.URL.Path, Status: status})
+	if len(d.audit) > 200 {
+		d.audit = d.audit[len(d.audit)-200:]
+	}
+	d.auditMu.Unlock()
 	d.requestPersistentSave()
 }
 
@@ -4881,6 +4987,138 @@ func (d *DNSLeaf) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"memory":   processMemory(),
 		},
 	})
+}
+
+func (d *DNSLeaf) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	d.statsMu.Lock()
+	stats := d.stats
+	d.statsMu.Unlock()
+	d.blockMu.RLock()
+	blocked := d.blockedCountLocked()
+	d.blockMu.RUnlock()
+	d.cacheMu.RLock()
+	cacheEntries := len(d.cache)
+	d.cacheMu.RUnlock()
+	d.clientsMu.Lock()
+	clients := len(d.clients)
+	d.clientsMu.Unlock()
+	d.readyMu.RLock()
+	dnsReady := d.dnsReady
+	httpReady := d.httpReady
+	d.readyMu.RUnlock()
+	activeUpstreams := len(d.activeUpstreams())
+	persistenceOK := 1
+	if d.persistenceError() != "" {
+		persistenceOK = 0
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, "# HELP dnsleaf_queries_total Total DNS queries processed.\n# TYPE dnsleaf_queries_total counter\ndnsleaf_queries_total %d\n", stats.Queries)
+	fmt.Fprintf(w, "# HELP dnsleaf_blocked_total Total blocked queries.\n# TYPE dnsleaf_blocked_total counter\ndnsleaf_blocked_total %d\n", stats.Blocked)
+	fmt.Fprintf(w, "# HELP dnsleaf_local_total Total locally answered queries.\n# TYPE dnsleaf_local_total counter\ndnsleaf_local_total %d\n", stats.Local)
+	fmt.Fprintf(w, "# HELP dnsleaf_cached_total Total cache hits.\n# TYPE dnsleaf_cached_total counter\ndnsleaf_cached_total %d\n", stats.Cached)
+	fmt.Fprintf(w, "# HELP dnsleaf_forwarded_total Total forwarded queries.\n# TYPE dnsleaf_forwarded_total counter\ndnsleaf_forwarded_total %d\n", stats.Forwarded)
+	fmt.Fprintf(w, "# HELP dnsleaf_blocked_domains Number of active blocked domains and rules.\n# TYPE dnsleaf_blocked_domains gauge\ndnsleaf_blocked_domains %d\n", blocked)
+	fmt.Fprintf(w, "# HELP dnsleaf_cache_entries Number of cached DNS responses.\n# TYPE dnsleaf_cache_entries gauge\ndnsleaf_cache_entries %d\n", cacheEntries)
+	fmt.Fprintf(w, "# HELP dnsleaf_clients Number of tracked clients.\n# TYPE dnsleaf_clients gauge\ndnsleaf_clients %d\n", clients)
+	fmt.Fprintf(w, "# HELP dnsleaf_active_upstreams Number of active upstream endpoints.\n# TYPE dnsleaf_active_upstreams gauge\ndnsleaf_active_upstreams %d\n", activeUpstreams)
+	fmt.Fprintf(w, "# HELP dnsleaf_dns_listeners_ready Number of DNS listeners whose serving loops started.\n# TYPE dnsleaf_dns_listeners_ready gauge\ndnsleaf_dns_listeners_ready %d\n", dnsReady)
+	fmt.Fprintf(w, "# HELP dnsleaf_http_listeners_ready Number of HTTP listeners bound for serving.\n# TYPE dnsleaf_http_listeners_ready gauge\ndnsleaf_http_listeners_ready %d\n", httpReady)
+	fmt.Fprintf(w, "# HELP dnsleaf_persistence_ok Whether runtime state persistence is healthy.\n# TYPE dnsleaf_persistence_ok gauge\ndnsleaf_persistence_ok %d\n", persistenceOK)
+}
+
+const maxBackupBytes = 256 * 1024 * 1024
+
+func (d *DNSLeaf) backupArchive() ([]byte, error) {
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	var total int64
+	addFile := func(name, path string, required bool) error {
+		info, err := os.Stat(path)
+		if err != nil {
+			if !required && os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("backup source is not a regular file: %s", path)
+		}
+		if info.Size() < 0 || total+info.Size() > maxBackupBytes {
+			return fmt.Errorf("backup exceeds %d MiB", maxBackupBytes/(1024*1024))
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		header.SetModTime(info.ModTime())
+		writer, err := archive.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		written, err := io.Copy(writer, file)
+		if err != nil {
+			return err
+		}
+		if written != info.Size() {
+			return fmt.Errorf("backup source changed while reading: %s", path)
+		}
+		total += written
+		return nil
+	}
+	if err := addFile("config.json", d.cfgPath, true); err != nil {
+		_ = archive.Close()
+		return nil, err
+	}
+	if err := addFile("stats.json", d.statePath, false); err != nil {
+		_ = archive.Close()
+		return nil, err
+	}
+	if err := filepath.Walk(d.gravityDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(d.gravityDir, path)
+		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+			return fmt.Errorf("invalid gravity backup path")
+		}
+		return addFile(filepath.ToSlash(filepath.Join("gravity", rel)), path, true)
+	}); err != nil {
+		_ = archive.Close()
+		return nil, err
+	}
+	if err := archive.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func (d *DNSLeaf) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data, err := d.backupArchive()
+	if err != nil {
+		http.Error(w, "could not create backup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="dnsleaf-backup.zip"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
 }
 
 func (d *DNSLeaf) activeUpstreams() []string {
@@ -6628,6 +6866,24 @@ func (d *DNSLeaf) handleLog(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
+	}
+}
+
+func (d *DNSLeaf) handleAudit(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		d.auditMu.Lock()
+		items := append([]AuditEntry(nil), d.audit...)
+		d.auditMu.Unlock()
+		writeJSON(w, items)
+	case http.MethodDelete:
+		d.auditMu.Lock()
+		d.audit = d.audit[:0]
+		d.auditMu.Unlock()
+		d.requestPersistentSave()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -8604,6 +8860,7 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	mux.HandleFunc("/api/ping", d.handlePing)
 	mux.HandleFunc("/api/healthz", d.handleHealthz)
 	mux.HandleFunc("/api/readyz", d.handleReadyz)
+	mux.HandleFunc("/metrics", d.handleMetrics)
 	mux.HandleFunc("/api/session", d.handleSession)
 	mux.HandleFunc("/api/login", d.handleLogin)
 	mux.HandleFunc("/api/status", d.handleStatus)
@@ -8623,7 +8880,9 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	mux.HandleFunc("/api/clients", d.handleClients)
 	mux.HandleFunc("/api/clients/", d.handleClientProfilePath)
 	mux.HandleFunc("/api/log", d.handleLog)
+	mux.HandleFunc("/api/audit", d.handleAudit)
 	mux.HandleFunc("/api/server-log", d.handleServerLog)
+	mux.HandleFunc("/api/backup", d.handleBackup)
 	mux.HandleFunc("/api/reload", d.handleReload)
 	mux.HandleFunc("/api/gravity/start", d.handleGravityStart)
 	mux.HandleFunc("/api/gravity/progress", d.handleGravityProgress)
