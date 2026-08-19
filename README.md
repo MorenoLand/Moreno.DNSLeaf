@@ -82,3 +82,7 @@ The repository has no parent-directory module dependencies. `vendor/` is generat
 ## Project direction
 
 The next major capabilities are long-term query storage and reporting, subscribed allowlists, richer client/list/domain group composition, DHCP server mode, diagnostic bundles, and backup/export tooling. These should be added behind tested persistence and policy boundaries rather than as independent UI-only features.
+
+## License
+
+DNSLeaf is released under the [MIT License](LICENSE). Vendored dependencies retain their own licenses.
