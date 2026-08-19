@@ -655,7 +655,7 @@ code{font-family:Consolas,"Courier New",monospace;font-size:.94em;color:#fff}
 <button id="btn-add-rec">Add Record</button>
 </div></div></div>
 <div class="panel"><h2>Import Zone File</h2><div class="panel-body"><div class="fr">
-<input id="import-path" placeholder="D:\Downloads\moreno.land.txt" style="flex:2">
+<input id="import-path" placeholder="path/to/zone-file.txt" style="flex:2">
 <input id="import-file" type="file" accept=".txt,.zone,.bind,.dns" style="display:none">
 <button id="btn-browse-zone" class="ghost">Browse</button>
 <input id="import-zone" placeholder="Zone origin, e.g. moreno.land" style="flex:1">
