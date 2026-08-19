@@ -1632,8 +1632,14 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 }
 
 const (
-	maxCacheEntries = 1000000
-	maxCacheTTL     = 7 * 24 * 60 * 60
+	maxCacheEntries   = 1000000
+	maxCacheTTL       = 7 * 24 * 60 * 60
+	maxTrackedClients = 10000
+	maxSeenSources    = 4096
+	maxRateEntries    = 10000
+	maxAnomalyEntries = 10000
+	maxLoginEntries   = 10000
+	maxSessions       = 1024
 )
 
 func validateConfig(cfg Config) error {
@@ -2063,6 +2069,9 @@ func (d *DNSLeaf) loadPersistentState() {
 	if state.Clients != nil {
 		d.clientsMu.Lock()
 		for ip, item := range state.Clients {
+			if len(d.clients) >= maxTrackedClients {
+				break
+			}
 			lastSeen, _ := time.Parse(time.RFC3339, item.LastSeen)
 			cp := clientState{
 				queries:   item.Queries,
@@ -2463,6 +2472,20 @@ func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 			d.clearCache()
 		}
 		buffered.flush(w)
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -3488,11 +3511,35 @@ func (d *DNSLeaf) dhcpClientName(ip string) string {
 	return ""
 }
 
+func (d *DNSLeaf) evictOldestClientLocked() {
+	oldestKey := ""
+	var oldest time.Time
+	for key, client := range d.clients {
+		if client == nil {
+			delete(d.clients, key)
+			return
+		}
+		if oldestKey == "" || client.lastSeen.Before(oldest) {
+			oldestKey = key
+			oldest = client.lastSeen
+		}
+	}
+	if oldestKey != "" {
+		delete(d.clients, oldestKey)
+	}
+}
+
 func (d *DNSLeaf) trackClient(ip, action string) {
+	if strings.TrimSpace(ip) == "" {
+		return
+	}
 	d.clientsMu.Lock()
 	defer d.clientsMu.Unlock()
 	c := d.clients[ip]
 	if c == nil {
+		if len(d.clients) >= maxTrackedClients {
+			d.evictOldestClientLocked()
+		}
 		c = &clientState{}
 		d.clients[ip] = c
 	}
@@ -3530,6 +3577,26 @@ func (d *DNSLeaf) disabledUpstream(addr string) bool {
 	return false
 }
 
+func capTimeHitMap(entries map[string][]time.Time, cutoff time.Time, max int) {
+	if len(entries) < max {
+		return
+	}
+	for key, hits := range entries {
+		if len(hits) == 0 || hits[len(hits)-1].Before(cutoff) {
+			delete(entries, key)
+			if len(entries) < max {
+				return
+			}
+		}
+	}
+	if len(entries) >= max {
+		for key := range entries {
+			delete(entries, key)
+			break
+		}
+	}
+}
+
 func (d *DNSLeaf) rateLimited(ip string) bool {
 	if !d.cfg.RateLimit.Enabled || d.cfg.RateLimit.Queries <= 0 || d.cfg.RateLimit.Window <= 0 || ip == "" {
 		return false
@@ -3539,6 +3606,9 @@ func (d *DNSLeaf) rateLimited(ip string) bool {
 	d.rateMu.Lock()
 	defer d.rateMu.Unlock()
 	hits := d.rateHits[ip]
+	if hits == nil {
+		capTimeHitMap(d.rateHits, cutoff, maxRateEntries)
+	}
 	n := 0
 	for _, hit := range hits {
 		if hit.After(cutoff) {
@@ -3561,6 +3631,9 @@ func (d *DNSLeaf) noteAnomaly(qname, source string) {
 	cutoff := now.Add(-time.Duration(d.cfg.Anomaly.Window) * time.Second)
 	d.anomalyMu.Lock()
 	hits := d.anomalyHits[name]
+	if hits == nil {
+		capTimeHitMap(d.anomalyHits, cutoff, maxAnomalyEntries)
+	}
 	n := 0
 	for _, hit := range hits {
 		if hit.After(cutoff) {
@@ -4114,6 +4187,12 @@ func (d *DNSLeaf) noteSource(ip, remote, localAddr, transport, mac, macStatus st
 	if d.seenSource[key] {
 		d.seenMu.Unlock()
 		return
+	}
+	if len(d.seenSource) >= maxSeenSources {
+		for existing := range d.seenSource {
+			delete(d.seenSource, existing)
+			break
+		}
 	}
 	d.seenSource[key] = true
 	d.seenMu.Unlock()
@@ -6282,6 +6361,22 @@ func (d *DNSLeaf) noteLoginFailure(client string) {
 	now := time.Now()
 	d.loginMu.Lock()
 	defer d.loginMu.Unlock()
+	if _, exists := d.loginAttempts[client]; !exists && len(d.loginAttempts) >= maxLoginEntries {
+		for key, attempt := range d.loginAttempts {
+			if attempt.FirstFailed.IsZero() || now.Sub(attempt.FirstFailed) >= loginWindow {
+				delete(d.loginAttempts, key)
+				if len(d.loginAttempts) < maxLoginEntries {
+					break
+				}
+			}
+		}
+		if len(d.loginAttempts) >= maxLoginEntries {
+			for key := range d.loginAttempts {
+				delete(d.loginAttempts, key)
+				break
+			}
+		}
+	}
 	attempt := d.loginAttempts[client]
 	if attempt.FirstFailed.IsZero() || now.Sub(attempt.FirstFailed) >= loginWindow {
 		attempt = loginAttempt{FirstFailed: now}
@@ -6331,6 +6426,25 @@ func (d *DNSLeaf) handleLogin(w http.ResponseWriter, r *http.Request) {
 		token := randomToken(32)
 		expires := time.Now().Add(12 * time.Hour)
 		d.sessMu.Lock()
+		now := time.Now()
+		for existing, session := range d.sessions {
+			if now.After(session.Expires) {
+				delete(d.sessions, existing)
+			}
+		}
+		if len(d.sessions) >= maxSessions {
+			oldestToken := ""
+			var oldest time.Time
+			for existing, session := range d.sessions {
+				if oldestToken == "" || session.Expires.Before(oldest) {
+					oldestToken = existing
+					oldest = session.Expires
+				}
+			}
+			if oldestToken != "" {
+				delete(d.sessions, oldestToken)
+			}
+		}
 		d.sessions[token] = Session{Username: user.Username, Role: user.Role, Expires: expires}
 		d.sessMu.Unlock()
 		http.SetCookie(w, &http.Cookie{
@@ -8037,7 +8151,7 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	mux.HandleFunc("/api/tls/selfsigned", d.handleSelfSignedTLS)
 	mux.HandleFunc("/api/users", d.handleUsers)
 
-	handler := d.configGuard(d.requireAuth(mux))
+	handler := securityHeaders(d.configGuard(d.requireAuth(mux)))
 	httpServer := newHTTPServer(cfg.HTTP, handler, log.New(serverLogWriter{dad: d}, "", 0))
 	d.registerHTTPServer(httpServer)
 	go func() {

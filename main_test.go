@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +179,104 @@ func TestConfigGuardRollsBackFailedPersistence(t *testing.T) {
 	if len(d.cfg.Records) != before {
 		t.Fatal("configuration mutation survived failed persistence")
 	}
+}
+
+func TestHTTPMutationMarkerAndPersistence(t *testing.T) {
+	d := NewDNSLeaf(defaultConfig(), filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(d.Stop)
+	d.cfg.Auth.Enabled = false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/records", d.handleRecords)
+	handler := securityHeaders(d.configGuard(d.requireAuth(mux)))
+	req := httptest.NewRequest(http.MethodPost, "/api/records", strings.NewReader(`{"host":"lan","type":"A","value":"192.0.2.10"}`))
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("missing request marker status = %d, want %d", res.Code, http.StatusForbidden)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/records", strings.NewReader(`{"host":"lan","type":"A","value":"192.0.2.10"}`))
+	req.Header.Set("X-DNSLeaf-Request", "1")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("marked mutation status = %d, want %d", res.Code, http.StatusOK)
+	}
+	if got := res.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("security header = %q, want nosniff", got)
+	}
+	data, err := os.ReadFile(d.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted Config
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Records) != len(defaultConfig().Records)+1 {
+		t.Fatalf("persisted records = %d, want %d", len(persisted.Records), len(defaultConfig().Records)+1)
+	}
+}
+
+func TestDoHServesLocalRecord(t *testing.T) {
+	d := newTestLeaf(t)
+	d.cfg.Auth.Enabled = false
+	d.cfg.LANOnly = false
+	d.cfg.Records = append(d.cfg.Records, Record{Host: "lan", Type: "A", Value: "192.0.2.11", IP: "192.0.2.11"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dns-query", d.handleDoH)
+	handler := securityHeaders(d.configGuard(d.requireAuth(mux)))
+	query := new(dns.Msg)
+	query.SetQuestion("lan.", dns.TypeA)
+	wire, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/dns-query", strings.NewReader(string(wire)))
+	req.RemoteAddr = "127.0.0.1:53000"
+	req.Header.Set("Content-Type", "application/dns-message")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("DoH status = %d, want %d", res.Code, http.StatusOK)
+	}
+	response := new(dns.Msg)
+	if err := response.Unpack(res.Body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Answer) != 1 || response.Answer[0].(*dns.A).A.String() != "192.0.2.11" {
+		t.Fatalf("unexpected DoH answer %#v", response.Answer)
+	}
+}
+
+func TestRuntimeStateMapsAreBounded(t *testing.T) {
+	d := newTestLeaf(t)
+	for i := 0; i < maxTrackedClients+1; i++ {
+		d.trackClient("client-"+strconv.Itoa(i), "forwarded")
+	}
+	d.clientsMu.Lock()
+	clients := len(d.clients)
+	d.clientsMu.Unlock()
+	if clients > maxTrackedClients {
+		t.Fatalf("tracked clients = %d, max %d", clients, maxTrackedClients)
+	}
+	for i := 0; i < maxLoginEntries+1; i++ {
+		d.noteLoginFailure("login-" + strconv.Itoa(i))
+	}
+	d.loginMu.Lock()
+	logins := len(d.loginAttempts)
+	d.loginMu.Unlock()
+	if logins > maxLoginEntries {
+		t.Fatalf("login attempts = %d, max %d", logins, maxLoginEntries)
+	}
+}
+
+func FuzzParseBlocklistLine(f *testing.F) {
+	for _, seed := range []string{"example.com", "0.0.0.0 example.com", "! comment", "*.example.com", "^ads\\.example\\.com$"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, line string) {
+		_ = parseBlocklistLine(line)
+	})
 }
 
 func TestValidUsername(t *testing.T) {
