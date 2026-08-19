@@ -2196,8 +2196,8 @@ func (d *DNSLeaf) readBlocklistSource(source string, forceRemote bool) ([]byte, 
 	if err != nil {
 		return nil, false, err
 	}
-	if err := os.MkdirAll(d.gravityDir, 0755); err == nil {
-		_ = os.WriteFile(cachePath, data, 0644)
+	if err := os.MkdirAll(d.gravityDir, 0700); err == nil {
+		_ = atomicWriteFile(cachePath, data, 0600)
 	}
 	return data, false, nil
 }
@@ -3976,6 +3976,10 @@ func (d *DNSLeaf) handleDoH(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if len(wire) > 64*1024 {
+		http.Error(w, "DNS message too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	msg := new(dns.Msg)
 	if err := msg.Unpack(wire); err != nil {
 		http.Error(w, "invalid DNS message", http.StatusBadRequest)
@@ -4992,7 +4996,6 @@ func (d *DNSLeaf) handleClearDeniedClients(w http.ResponseWriter, r *http.Reques
 }
 
 func (d *DNSLeaf) handleProfiles(w http.ResponseWriter, r *http.Request) {
-	ensureBuiltinProfiles(&d.cfg)
 	switch r.Method {
 	case "GET":
 		writeJSON(w, map[string]interface{}{"profiles": d.cfg.Profiles, "default_profile": d.cfg.DefaultProfile})
@@ -5403,11 +5406,11 @@ func (d *DNSLeaf) handleSelfSignedTLS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if err := os.MkdirAll(filepathDir(certFile), 0755); err != nil {
+	if err := os.MkdirAll(filepathDir(certFile), 0700); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	if err := os.MkdirAll(filepathDir(keyFile), 0755); err != nil {
+	if err := os.MkdirAll(filepathDir(keyFile), 0700); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -5536,15 +5539,11 @@ func filepathDir(path string) string {
 }
 
 func writePEMFile(path string, perm os.FileMode, block *pem.Block) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
+	var data bytes.Buffer
+	if err := pem.Encode(&data, block); err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := pem.Encode(f, block); err != nil {
-		return err
-	}
-	return os.Chmod(path, perm)
+	return atomicWriteFile(path, data.Bytes(), perm)
 }
 
 type systemStats struct {
@@ -7694,7 +7693,12 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	d.consoleLogf("[DNSLeaf] ready")
 
 	if d.ui == nil {
-		return <-errCh
+		select {
+		case err := <-errCh:
+			return err
+		case <-d.stopCh:
+			return nil
+		}
 	}
 	var runErr error
 	var runErrMu sync.Mutex
