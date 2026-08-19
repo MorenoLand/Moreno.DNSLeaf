@@ -4904,6 +4904,20 @@ func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+func versionedAPIHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/api/v1"
+		if r.URL.Path == prefix || strings.HasPrefix(r.URL.Path, prefix+"/") {
+			clone := r.Clone(r.Context())
+			clone.URL.Path = "/api" + strings.TrimPrefix(r.URL.Path, prefix)
+			clone.URL.RawPath = ""
+			next.ServeHTTP(w, clone)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (d *DNSLeaf) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"app": "dnsleaf", "ok": true, "uptime": time.Since(d.started).Truncate(time.Second).String()})
 }
@@ -8925,7 +8939,7 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	mux.HandleFunc("/api/tls/selfsigned", d.handleSelfSignedTLS)
 	mux.HandleFunc("/api/users", d.handleUsers)
 
-	handler := securityHeaders(d.configGuard(d.requireAuth(mux)))
+	handler := securityHeaders(versionedAPIHandler(d.configGuard(d.requireAuth(mux))))
 	httpServer := newHTTPServer(cfg.HTTP, handler, log.New(serverLogWriter{dad: d}, "", 0))
 	d.registerHTTPServer(httpServer, httpListener)
 	d.markHTTPReady()

@@ -1,0 +1,197 @@
+openapi: 3.0.3
+info:
+  title: DNSLeaf HTTP API
+  version: "1"
+  description: Authenticated administration API for DNSLeaf. The `/api/v1` paths are stable aliases for the current `/api` routes.
+servers:
+  - url: /
+tags:
+  - name: health
+  - name: runtime
+  - name: policy
+  - name: administration
+paths:
+  /api/v1/healthz:
+    get:
+      tags: [health]
+      security: []
+      responses:
+        '200': {description: Process is alive}
+        '503': {description: Process is stopping}
+  /api/v1/readyz:
+    get:
+      tags: [health]
+      security: []
+      responses:
+        '200': {description: DNSLeaf is ready}
+        '503': {description: Listeners or upstreams are not ready}
+  /api/v1/session:
+    get:
+      tags: [administration]
+      security: []
+      responses:
+        '200': {description: Authentication state}
+  /api/v1/login:
+    post:
+      tags: [administration]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200': {description: Session created}
+        '401': {description: Invalid credentials}
+    delete:
+      tags: [administration]
+      security: [{cookieAuth: []}]
+      responses:
+        '204': {description: Session removed}
+  /api/v1/status:
+    get:
+      tags: [runtime]
+      responses:
+        '200': {description: Runtime status and aggregate counters}
+  /api/v1/log:
+    get:
+      tags: [runtime]
+      responses:
+        '200':
+          description: Recent query history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/QueryEntry'}
+    delete:
+      tags: [runtime]
+      responses:
+        '204': {description: Query history cleared}
+  /api/v1/audit:
+    get:
+      tags: [administration]
+      responses:
+        '200':
+          description: Administrator audit history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AuditEntry'}
+    delete:
+      tags: [administration]
+      responses:
+        '204': {description: Audit history cleared}
+  /api/v1/backup:
+    get:
+      tags: [administration]
+      responses:
+        '200':
+          description: ZIP archive containing configuration, runtime state, and gravity cache files
+          content:
+            application/zip: {schema: {type: string, format: binary}}
+  /api/v1/records:
+    get:
+      tags: [policy]
+      responses:
+        '200': {description: Local DNS records}
+    post:
+      tags: [policy]
+      parameters: [{$ref: '#/components/parameters/MutationHeader'}]
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: '#/components/schemas/Record'}}
+      responses:
+        '200': {description: Record added}
+        '400': {description: Invalid record}
+  /api/v1/blocklists:
+    get:
+      tags: [policy]
+      responses:
+        '200': {description: Configured blocklist sources}
+    post:
+      tags: [policy]
+      parameters: [{$ref: '#/components/parameters/MutationHeader'}]
+      responses:
+        '200': {description: Blocklist added}
+  /api/v1/upstreams:
+    get:
+      tags: [policy]
+      responses:
+        '200': {description: Legacy and secure upstream endpoints}
+    post:
+      tags: [policy]
+      parameters: [{$ref: '#/components/parameters/MutationHeader'}]
+      responses:
+        '200': {description: Upstream added}
+  /api/v1/settings:
+    get:
+      tags: [administration]
+      responses:
+        '200': {description: Resolver settings}
+    patch:
+      tags: [administration]
+      parameters: [{$ref: '#/components/parameters/MutationHeader'}]
+      responses:
+        '200': {description: Settings saved}
+  /api/v1/users:
+    get:
+      tags: [administration]
+      responses:
+        '200': {description: Configured users; administrator role required}
+    post:
+      tags: [administration]
+      parameters: [{$ref: '#/components/parameters/MutationHeader'}]
+      responses:
+        '200': {description: User added}
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: dnsleaf_session
+  parameters:
+    MutationHeader:
+      name: X-DNSLeaf-Request
+      in: header
+      required: true
+      schema: {type: string, enum: ['1']}
+      description: Required on state-changing requests for browser cross-site request protection.
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+    Record:
+      type: object
+      required: [host, type, value]
+      properties:
+        host: {type: string}
+        type: {type: string, enum: [A, AAAA, CNAME, TXT, MX, SRV, PTR, HTTPS, SVCB]}
+        value: {type: string}
+        priority: {type: integer, minimum: 0, maximum: 65535}
+        weight: {type: integer, minimum: 0, maximum: 65535}
+        port: {type: integer, minimum: 0, maximum: 65535}
+        note: {type: string}
+    QueryEntry:
+      type: object
+      properties:
+        ts: {type: integer, format: int64}
+        client_ip: {type: string}
+        domain: {type: string}
+        type: {type: string}
+        action: {type: string}
+        duration_ms: {type: integer, format: int64}
+    AuditEntry:
+      type: object
+      properties:
+        ts: {type: integer, format: int64}
+        time: {type: string, format: date-time}
+        username: {type: string}
+        method: {type: string}
+        path: {type: string}
+        status: {type: integer}

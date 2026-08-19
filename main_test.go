@@ -258,6 +258,16 @@ func TestMetricsAndBackupEndpoints(t *testing.T) {
 	}
 }
 
+func TestVersionedAPIHandler(t *testing.T) {
+	d := newTestLeaf(t)
+	handler := versionedAPIHandler(http.HandlerFunc(d.handleHealthz))
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/healthz", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("versioned health status = %d, want %d", res.Code, http.StatusOK)
+	}
+}
+
 func TestMessageCacheTTLUsesMinimumAndNegativeTTL(t *testing.T) {
 	msg := new(dns.Msg)
 	msg.Answer = []dns.RR{

@@ -2,6 +2,8 @@
 
 The web API is served from the configured HTTP and HTTPS listeners. The bundled panel and remote console are the reference clients.
 
+The machine-readable contract is [`openapi.yaml`](openapi.yaml). The versioned `/api/v1` namespace is available alongside the existing `/api` paths.
+
 ## Access and request rules
 
 - `GET /api/healthz` is an unauthenticated process liveness check.
