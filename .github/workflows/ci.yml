@@ -8,7 +8,11 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -19,3 +23,5 @@ jobs:
       - run: go test -race -mod=vendor ./...
       - run: go vet -mod=vendor ./...
       - run: go test -mod=mod ./...
+      - run: go mod verify
+      - run: git diff --check

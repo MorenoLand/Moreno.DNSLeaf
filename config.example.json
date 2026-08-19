@@ -11,6 +11,7 @@
     "8.8.8.8:53",
     "8.8.4.4:53"
   ],
+  "upstream_endpoints": [],
   "blocked": [],
   "allowed": [],
   "blocklists": [
@@ -23,6 +24,10 @@
   "cache_enabled": true,
   "cache_size": 1000,
   "cache_ttl_seconds": 300,
+  "strip_ecs": true,
+  "query_log_enabled": true,
+  "query_log_retention_hours": 168,
+  "anonymize_client_ips": false,
   "portal_host": "dns.leaf",
   "portal_ip": "127.0.0.1",
   "lan_only": true,

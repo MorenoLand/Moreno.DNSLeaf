@@ -130,6 +130,34 @@ func TestValidateSecureUpstreamEndpoints(t *testing.T) {
 	}
 }
 
+func TestUpstreamEndpointAPI(t *testing.T) {
+	d := newTestLeaf(t)
+	d.cfg.Upstreams = nil
+	req := httptest.NewRequest(http.MethodPost, "/api/upstreams", strings.NewReader(`{"address":"cloudflare-dns.com:853","protocol":"tls"}`))
+	res := httptest.NewRecorder()
+	d.handleUpstreams(res, req)
+	if res.Code != http.StatusOK || len(d.cfg.UpstreamEndpoints) != 1 {
+		t.Fatalf("secure upstream API status = %d, endpoints = %#v", res.Code, d.cfg.UpstreamEndpoints)
+	}
+	if d.cfg.UpstreamEndpoints[0].URL != "tls://cloudflare-dns.com:853" {
+		t.Fatalf("secure upstream URL = %q", d.cfg.UpstreamEndpoints[0].URL)
+	}
+}
+
+func TestValidateAndResolveSVCBRecord(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Records = []Record{{Host: "service", Type: "SVCB", Value: "1 . alpn=h2 port=443"}}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("SVCB record rejected: %v", err)
+	}
+	d := NewDNSLeaf(cfg, filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(d.Stop)
+	answers := d.resolveLocal("service.", dns.TypeSVCB)
+	if len(answers) != 1 || answers[0].Header().Rrtype != dns.TypeSVCB {
+		t.Fatalf("unexpected SVCB answers: %#v", answers)
+	}
+}
+
 func TestStripClientSubnet(t *testing.T) {
 	query := new(dns.Msg)
 	query.SetQuestion("example.com.", dns.TypeA)

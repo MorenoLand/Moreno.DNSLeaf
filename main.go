@@ -4966,21 +4966,25 @@ func (d *DNSLeaf) handleStatus(w http.ResponseWriter, r *http.Request) {
 	bc := d.blockedCountLocked()
 	d.blockMu.RUnlock()
 	writeJSON(w, map[string]interface{}{
-		"uptime":            time.Since(d.started).Truncate(time.Second).String(),
-		"persistence_error": d.persistenceError(),
-		"stats":             s,
-		"blocked_count":     bc,
-		"blocklist_count":   len(d.cfg.Blocklists),
-		"records_count":     len(d.cfg.Records),
-		"upstream_count":    len(d.cfg.Upstreams),
-		"active_upstreams":  len(d.activeUpstreams()),
-		"client_count":      len(d.clientList()),
-		"listen":            d.cfg.Listen,
-		"http":              d.cfg.HTTP,
-		"cache_enabled":     d.cfg.Cache,
-		"lan_only":          d.cfg.LANOnly,
-		"whitelist_only":    d.cfg.WhitelistOnly,
-		"resolver_disabled": d.cfg.ResolverDisabled,
+		"uptime":                    time.Since(d.started).Truncate(time.Second).String(),
+		"persistence_error":         d.persistenceError(),
+		"stats":                     s,
+		"blocked_count":             bc,
+		"blocklist_count":           len(d.cfg.Blocklists),
+		"records_count":             len(d.cfg.Records),
+		"upstream_count":            len(d.cfg.Upstreams) + len(d.cfg.UpstreamEndpoints),
+		"active_upstreams":          len(d.activeUpstreams()),
+		"client_count":              len(d.clientList()),
+		"listen":                    d.cfg.Listen,
+		"http":                      d.cfg.HTTP,
+		"cache_enabled":             d.cfg.Cache,
+		"strip_ecs":                 d.cfg.StripECS,
+		"query_log_enabled":         d.cfg.QueryLogEnabled,
+		"query_log_retention_hours": d.cfg.QueryLogRetention,
+		"anonymize_client_ips":      d.cfg.AnonymizeClientIPs,
+		"lan_only":                  d.cfg.LANOnly,
+		"whitelist_only":            d.cfg.WhitelistOnly,
+		"resolver_disabled":         d.cfg.ResolverDisabled,
 		"host": map[string]interface{}{
 			"hostname": sys.Hostname,
 			"cpu":      sys.CPU,
@@ -5867,14 +5871,20 @@ func (d *DNSLeaf) handleBlockGroups(w http.ResponseWriter, r *http.Request) {
 func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		items := make([]map[string]interface{}, 0, len(d.cfg.Upstreams))
+		items := make([]map[string]interface{}, 0, len(d.cfg.Upstreams)+len(d.cfg.UpstreamEndpoints))
 		for _, addr := range d.cfg.Upstreams {
-			items = append(items, map[string]interface{}{"address": addr, "enabled": !d.disabledUpstream(addr)})
+			items = append(items, map[string]interface{}{"address": addr, "protocol": "udp", "enabled": !d.disabledUpstream(addr)})
+		}
+		for _, endpoint := range d.cfg.UpstreamEndpoints {
+			route, _ := parseUpstreamEndpoint(endpoint)
+			items = append(items, map[string]interface{}{"address": endpoint.URL, "protocol": route.scheme, "server_name": endpoint.ServerName, "enabled": !d.disabledUpstream(endpoint.URL)})
 		}
 		writeJSON(w, items)
 	case "POST":
 		var body struct {
-			Address string `json:"address"`
+			Address    string `json:"address"`
+			Protocol   string `json:"protocol"`
+			ServerName string `json:"server_name"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -5885,11 +5895,29 @@ func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "address required", 400)
 			return
 		}
-		if !strings.Contains(addr, ":") {
-			addr = addr + ":53"
+		protocol := strings.ToLower(strings.TrimSpace(body.Protocol))
+		if protocol == "" || protocol == "udp" || protocol == "tcp" {
+			if protocol == "" || protocol == "udp" {
+				if !strings.Contains(addr, ":") {
+					addr = addr + ":53"
+				}
+				d.cfg.Upstreams = append(d.cfg.Upstreams, addr)
+				writeJSON(w, map[string]string{"address": addr, "protocol": "udp"})
+				return
+			}
+			if !strings.Contains(addr, "://") {
+				addr = protocol + "://" + addr
+			}
+		} else if !strings.Contains(addr, "://") {
+			addr = protocol + "://" + addr
 		}
-		d.cfg.Upstreams = append(d.cfg.Upstreams, addr)
-		writeJSON(w, map[string]string{"address": addr})
+		endpoint := UpstreamEndpoint{URL: addr, ServerName: strings.TrimSpace(body.ServerName)}
+		if err := validateUpstreamEndpoint(endpoint); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		d.cfg.UpstreamEndpoints = append(d.cfg.UpstreamEndpoints, endpoint)
+		writeJSON(w, map[string]string{"address": endpoint.URL, "protocol": protocol})
 	case "PATCH":
 		var body struct {
 			Address string `json:"address"`
@@ -5929,6 +5957,13 @@ func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		nextEndpoints := d.cfg.UpstreamEndpoints[:0]
+		for _, endpoint := range d.cfg.UpstreamEndpoints {
+			if endpoint.URL != body.Address {
+				nextEndpoints = append(nextEndpoints, endpoint)
+			}
+		}
+		d.cfg.UpstreamEndpoints = nextEndpoints
 		next := d.cfg.DisabledUpstreams[:0]
 		for _, item := range d.cfg.DisabledUpstreams {
 			if item != body.Address {
@@ -8961,6 +8996,16 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--version", "-version", "version":
+			printVersion()
+			return
+		case "--help", "-h", "help":
+			printUsage()
+			return
+		}
+	}
 	cfgPath := "config.json"
 	useTUI := true
 	remoteMode := false

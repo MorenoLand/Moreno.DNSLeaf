@@ -31,12 +31,14 @@ Relative paths are resolved from the configuration file directory, so the config
 - `https` enables the HTTPS panel and DoH endpoint when `tls_cert_file` and `tls_key_file` are also set.
 - `dot` enables DNS-over-TLS when the same certificate and key are available.
 - `upstreams` contains DNS server addresses. Truncated UDP responses are retried over TCP.
+- `upstream_endpoints` accepts `udp://`, `tcp://`, `tls://`, and `https://` endpoints. TLS endpoints require a DNS `server_name` when the address is an IP; HTTPS endpoints default to `/dns-query`.
+- `strip_ecs` removes EDNS Client Subnet options before forwarding, and is enabled by default for client privacy.
 - `conditional_forwarding` selects alternate upstreams for matching domain suffixes.
 - `upstream_health` probes configured upstreams and temporarily excludes repeatedly failing servers.
 
 ## Policy and records
 
-- `records` contains local `A`, `AAAA`, `CNAME`, `TXT`, `MX`, `SRV`, and `PTR` answers.
+- `records` contains local `A`, `AAAA`, `CNAME`, `TXT`, `MX`, `SRV`, `PTR`, `HTTPS`, and `SVCB` answers.
 - `blocked`, `allowed`, and `blocked_ips` provide manual policy rules. `blocklists` adds local files or HTTPS subscriptions; remote data is cached under `gravity/`.
 - `profiles` and `client_profiles` apply per-client policy. `scheduled_rules` can change policy during defined windows.
 - `lan_only` rejects non-private, non-loopback, and non-link-local clients unless they are explicitly whitelisted.
@@ -47,10 +49,12 @@ Relative paths are resolved from the configuration file directory, so the config
 
 `cache_enabled`, `cache_size`, and `cache_ttl_seconds` control response caching. The configured TTL caps authoritative positive or negative TTLs; responses without a useful TTL are not cached. Cached responses are returned with TTLs reduced by their age.
 
-DNSLeaf writes `stats.json` and the `gravity/` cache beside the configuration file. Configuration and state updates use temporary files and replacement writes, and state files are created with private permissions where the platform supports them. Back up `config.json`, `stats.json`, blocklists, and certificate material separately.
+`query_log_enabled` controls query-history collection. `query_log_retention_hours` bounds retained history and `anonymize_client_ips` stores a network prefix instead of the client address and omits MAC/local-address details. Statistics remain aggregated even when query logging is disabled.
+
+DNSLeaf writes `stats.json` and the `gravity/` cache beside the configuration file. Configuration and state updates use temporary files and replacement writes, and state files are created with private permissions where the platform supports them. The protected `/api/backup` endpoint exports configuration, runtime state, and cached blocklists; certificate material is intentionally excluded and should be backed up separately.
 
 ## Authentication and optional proxies
 
-Set `auth.enabled` to true for the web panel. An empty user list causes DNSLeaf to create one administrator and print a generated password on first start. Password changes, role changes, and removals revoke the affected sessions. Login failures are throttled per client address.
+Set `auth.enabled` to true for the web panel. An empty user list causes DNSLeaf to create one administrator and print a generated password on first start. Password changes, role changes, and removals revoke the affected sessions. Login failures are throttled per client address. `/api/audit` is restricted to administrators and records successful state-changing API requests.
 
 `http_proxy_enabled`/`http_proxy` and `socks_proxy_enabled`/`socks_proxy` enable optional outbound proxy listeners. These are separate listeners with the same client access policy as DNS and should remain disabled unless their bind addresses and firewall rules are deliberate.

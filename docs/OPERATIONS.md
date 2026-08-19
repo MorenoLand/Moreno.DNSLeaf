@@ -32,11 +32,13 @@ curl http://127.0.0.1:8080/api/healthz
 curl -i http://127.0.0.1:8080/api/readyz
 ```
 
-`healthz` reports that the process is alive. `readyz` returns `503` until the DNS and HTTP listeners are registered and an active upstream is available, unless forwarding is disabled.
+`healthz` reports that the process is alive. `readyz` returns `503` until the DNS serving loops have started, the panel listeners are bound, and an active upstream is available, unless forwarding is disabled. Startup bind and TLS failures are returned to the service manager.
+
+Authenticated monitoring and maintenance endpoints are available at `/metrics`, `/api/audit`, and `/api/backup`. Treat backup archives as secrets because they contain the configuration and password hashes.
 
 ## Blocklists and policy changes
 
-Use the panel's Gravity action or the console's `gravity` command to refresh blocklists. Local sources are resolved relative to the configuration file. Remote sources use an HTTPS-capable client with a bounded request timeout and retain a cached copy if refresh fails.
+Use the panel's Gravity action or the console's `gravity` command to refresh blocklists. Local sources are resolved relative to the configuration file. Remote sources use a bounded request timeout, reject downloads over 50 MiB, refresh stale caches after 24 hours, and retain a cached copy if refresh fails.
 
 After changing records, policies, users, or listeners, confirm the success response and restart DNSLeaf when a listener address or certificate changes. Listener settings are read at startup; configuration writes do not reopen existing sockets.
 

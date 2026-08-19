@@ -22,16 +22,16 @@ The manual GitHub Actions workflow runs the repository checks but does not publi
 Use a clean checkout and write output outside the source tree or to a disposable, ignored path:
 
 ```powershell
-go build -mod=vendor -trimpath -ldflags "-s -w" -o dnsleaf.exe .
-Get-FileHash .\dnsleaf.exe -Algorithm SHA256
+.\scripts\build.ps1 -Version 1.0.0
+Get-FileHash .\dist\dnsleaf-windows-amd64.exe -Algorithm SHA256
 ```
 
 ```bash
-go build -mod=vendor -trimpath -ldflags '-s -w' -o dnsleaf .
-sha256sum dnsleaf
+./scripts/build.sh 1.0.0
+sha256sum dist/dnsleaf-linux-amd64
 ```
 
-Build each target separately when publishing multi-platform artifacts. Do not include `config.json`, `stats.json`, `gravity/`, generated certificates, or local blocklists in a release archive.
+The scripts use `-trimpath`, vendored dependencies, and embedded version/commit/build-time metadata. Build each target separately when publishing multi-platform artifacts. Do not include `config.json`, `stats.json`, `gravity/`, generated certificates, or local blocklists in a release archive.
 
 ## Publication checklist
 
@@ -41,3 +41,4 @@ Build each target separately when publishing multi-platform artifacts. Do not in
 4. Verify a fresh configuration using `dnsleaf --config config.json validate`.
 5. Create an annotated version tag and publish the binaries and checksums manually.
 6. Test UDP, TCP, the administration panel, and any enabled encrypted listener from a fresh deployment.
+7. Generate a software bill of materials with the chosen release tooling and publish it beside the checksums; no release workflow performs this automatically.

@@ -18,11 +18,11 @@ Every DNS request follows this order:
 10. Inspect returned addresses for blocked IPs.
 11. Record statistics, query history, and client state.
 
-UDP and TCP DNS use the miekg/dns server. DNS-over-HTTPS enters through `/dns-query` and feeds the same resolver path. DNS-over-TLS uses the configured certificate and the same DNS handler. Optional HTTP and SOCKS proxy listeners are independent transports that reuse client access policy.
+UDP and TCP DNS use the miekg/dns server. DNS-over-HTTPS enters through `/dns-query` and feeds the same resolver path. DNS-over-TLS uses the configured certificate and the same DNS handler. Forwarding can use legacy UDP/TCP addresses or validated UDP/TCP/TLS/HTTPS upstream endpoints. Optional HTTP and SOCKS proxy listeners are independent transports that reuse client access policy.
 
 ## State ownership
 
-The configuration file is the source of truth for users, records, policies, listeners, and upstreams. Query statistics, recent query history, and client counters are persisted separately in `stats.json`. Remote blocklist data is cached under `gravity/`.
+The configuration file is the source of truth for users, records, policies, listeners, and upstreams. Query statistics, recent query history, audit entries, and client counters are persisted separately in `stats.json`. Remote blocklist data is cached under `gravity/` with a bounded freshness window.
 
 All configured relative paths are resolved from the selected configuration file directory. Runtime writes are serialized, debounced for high-frequency query state, and written through temporary files before replacement. HTTP configuration mutations are validated and committed as a single buffered request transaction. Deployment state is intentionally excluded from the public source tree.
 
@@ -30,7 +30,7 @@ All configured relative paths are resolved from the selected configuration file 
 
 Configuration reads and mutations use a read/write lock. Query statistics, logs, clients, sessions, policy indexes, cache entries, upstream health, gravity progress, and login throttling each have their own synchronization boundary. A single background persistence worker coalesces state-save requests and performs a final flush during shutdown.
 
-HTTP servers have bounded header, read, write, and idle timeouts. The panel exposes liveness/readiness checks, applies browser security headers, and requires an explicit marker on state-changing requests. Shutdown closes registered DNS/HTTP servers and proxy listeners, waits up to the graceful-shutdown window, stops the console, and flushes state.
+HTTP servers have bounded header, read, write, and idle timeouts. The panel exposes liveness/readiness checks, protected metrics, audit, and backup endpoints, applies browser security headers, and requires an explicit marker on state-changing requests. Startup binds configured sockets before returning and readiness is marked only after serving loops start. Shutdown closes registered DNS/HTTP servers and proxy listeners, waits up to the graceful-shutdown window, stops the console, and flushes state.
 
 ## Policy boundaries
 
