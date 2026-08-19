@@ -75,7 +75,7 @@ go test -race -mod=vendor ./...
 go vet -mod=vendor ./...
 ```
 
-The project currently keeps the DNS dependency under a local module replacement and also ships a vendor tree. Keep both copies synchronized and verify vendor-mode and module-mode builds before publishing dependency changes.
+The repository has no parent-directory module dependencies. `vendor/` is generated from `go.mod`; verify both vendor-mode and module-mode builds when changing dependencies.
 
 ## Project direction
 

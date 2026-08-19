@@ -36,7 +36,7 @@ go test -mod=vendor ./...
 go vet -mod=vendor ./...
 ```
 
-The vendored build is the reproducible offline build. The module replacement for the local DNS dependency must be kept synchronized with `vendor/` before publishing a release.
+The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both `-mod=vendor` and `-mod=mod` test runs before publishing a release.
 ## Linux service
 
 Run DNSLeaf under a dedicated unprivileged service account with `CAP_NET_BIND_SERVICE`, a private configuration directory, and a firewall that permits DNS only from intended clients. Do not expose the administration panel or optional proxies without an explicit access policy.
