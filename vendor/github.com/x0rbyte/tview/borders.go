@@ -1,0 +1,118 @@
+package tview
+
+// BorderSet defines various borders used when primitives are drawn.
+type BorderSet struct {
+	Top         string
+	Bottom      string
+	Left        string
+	Right       string
+	TopLeft     string
+	TopRight    string
+	BottomLeft  string
+	BottomRight string
+	TopT        string
+	BottomT     string
+	LeftT       string
+	RightT      string
+}
+
+func BorderSetHidden() BorderSet {
+	return BorderSet{
+		Top:         " ",
+		Bottom:      " ",
+		Left:        " ",
+		Right:       " ",
+		TopLeft:     " ",
+		TopRight:    " ",
+		BottomLeft:  " ",
+		BottomRight: " ",
+		TopT:        " ",
+		BottomT:     " ",
+		LeftT:       " ",
+		RightT:      " ",
+	}
+}
+
+func BorderSetPlain() BorderSet {
+	return BorderSet{
+		Top:         BoxDrawingsLightHorizontal,
+		Bottom:      BoxDrawingsLightHorizontal,
+		Left:        BoxDrawingsLightVertical,
+		Right:       BoxDrawingsLightVertical,
+		TopLeft:     BoxDrawingsLightDownAndRight,
+		TopRight:    BoxDrawingsLightDownAndLeft,
+		BottomLeft:  BoxDrawingsLightUpAndRight,
+		BottomRight: BoxDrawingsLightUpAndLeft,
+		TopT:        BoxDrawingsLightDownAndHorizontal,
+		BottomT:     BoxDrawingsLightUpAndHorizontal,
+		LeftT:       BoxDrawingsLightVerticalAndRight,
+		RightT:      BoxDrawingsLightVerticalAndLeft,
+	}
+}
+
+func BorderSetRound() BorderSet {
+	return BorderSet{
+		Top:         BoxDrawingsLightHorizontal,
+		Bottom:      BoxDrawingsLightHorizontal,
+		Left:        BoxDrawingsLightVertical,
+		Right:       BoxDrawingsLightVertical,
+		TopLeft:     BoxDrawingsLightArcDownAndRight,
+		TopRight:    BoxDrawingsLightArcDownAndLeft,
+		BottomLeft:  BoxDrawingsLightArcUpAndRight,
+		BottomRight: BoxDrawingsLightArcUpAndLeft,
+		TopT:        BoxDrawingsLightDownAndHorizontal,
+		BottomT:     BoxDrawingsLightUpAndHorizontal,
+		LeftT:       BoxDrawingsLightVerticalAndRight,
+		RightT:      BoxDrawingsLightVerticalAndLeft,
+	}
+}
+
+func BorderSetThick() BorderSet {
+	return BorderSet{
+		Top:         BoxDrawingsHeavyHorizontal,
+		Bottom:      BoxDrawingsHeavyHorizontal,
+		Left:        BoxDrawingsHeavyVertical,
+		Right:       BoxDrawingsHeavyVertical,
+		TopLeft:     BoxDrawingsHeavyDownAndRight,
+		TopRight:    BoxDrawingsHeavyDownAndLeft,
+		BottomLeft:  BoxDrawingsHeavyUpAndRight,
+		BottomRight: BoxDrawingsHeavyUpAndLeft,
+		TopT:        BoxDrawingsHeavyDownAndHorizontal,
+		BottomT:     BoxDrawingsHeavyUpAndHorizontal,
+		LeftT:       BoxDrawingsHeavyVerticalAndRight,
+		RightT:      BoxDrawingsHeavyVerticalAndLeft,
+	}
+}
+
+func BorderSetDouble() BorderSet {
+	return BorderSet{
+		Top:         BoxDrawingsDoubleHorizontal,
+		Bottom:      BoxDrawingsDoubleHorizontal,
+		Left:        BoxDrawingsDoubleVertical,
+		Right:       BoxDrawingsDoubleVertical,
+		TopLeft:     BoxDrawingsDoubleDownAndRight,
+		TopRight:    BoxDrawingsDoubleDownAndLeft,
+		BottomLeft:  BoxDrawingsDoubleUpAndRight,
+		BottomRight: BoxDrawingsDoubleUpAndLeft,
+		TopT:        BoxDrawingsDoubleDownAndHorizontal,
+		BottomT:     BoxDrawingsDoubleUpAndHorizontal,
+		LeftT:       BoxDrawingsDoubleVerticalAndRight,
+		RightT:      BoxDrawingsDoubleVerticalAndLeft,
+	}
+}
+
+type Borders uint
+
+const (
+	BordersTop Borders = 1 << iota
+	BordersBottom
+	BordersLeft
+	BordersRight
+
+	BordersNone Borders = 0
+	BordersAll  Borders = BordersTop | BordersBottom | BordersLeft | BordersRight
+)
+
+func (b Borders) Has(flag Borders) bool {
+	return b&flag != 0
+}
