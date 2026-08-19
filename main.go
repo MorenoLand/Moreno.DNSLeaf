@@ -842,7 +842,7 @@ Self-signed certificates are encrypted and standards-shaped, but browsers will n
 var cur='dashboard',li,me={role:'viewer'},blkRows=[],blkPage=1,listsCache=[],groupsCache=[],listEntryCache={},profileCache={},defaultProfile='default',gravityTimer=null;
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function toast(msg,type){var wrap=document.getElementById('toasts'),el=document.createElement('div');el.className='toast '+(type||'');el.textContent=msg;wrap.appendChild(el);setTimeout(function(){el.style.opacity='0';el.style.transform='translateY(6px)';},2600);setTimeout(function(){el.remove();},3200)}
-function api(m,p,b){var o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);return fetch(p,o).then(function(r){if(r.status===401){showLogin();return null;}if(r.status===204)return null;if(!r.ok)throw new Error(r.status);return r.json()}).catch(function(){toast('Request failed: '+p,'err');return null})}
+function api(m,p,b){var o={method:m,headers:{'Content-Type':'application/json','X-DNSLeaf-Request':'1'}};if(b)o.body=JSON.stringify(b);return fetch(p,o).then(function(r){if(r.status===401){showLogin();return null;}if(r.status===204)return null;if(!r.ok)throw new Error(r.status);return r.json()}).catch(function(){toast('Request failed: '+p,'err');return null})}
 function showLogin(){document.getElementById('auth').classList.remove('hide');}
 function hideLogin(){document.getElementById('auth').classList.add('hide');}
 function loadRememberedLogin(){
@@ -994,7 +994,7 @@ function importZone(){
  if(f){
   var fd=new FormData();
   fd.append('file',f);fd.append('zone',z);fd.append('overwrite',document.getElementById('import-overwrite').checked?'true':'false');
-  fetch('/api/records/import',{method:'POST',body:fd}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(r){
+  fetch('/api/records/import',{method:'POST',headers:{'X-DNSLeaf-Request':'1'},body:fd}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(r){
    document.getElementById('import-result').textContent='Imported '+r.imported+', skipped '+r.skipped;
    document.getElementById('import-file').value='';
    loadRec();
@@ -1631,6 +1631,224 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	return out[:keyLen]
 }
 
+const (
+	maxCacheEntries = 1000000
+	maxCacheTTL     = 7 * 24 * 60 * 60
+)
+
+func validateConfig(cfg Config) error {
+	var issues []string
+	add := func(field, message string) { issues = append(issues, field+" "+message) }
+	if err := validateNetworkAddress(cfg.Listen, true); err != nil {
+		add("listen", err.Error())
+	}
+	if err := validateNetworkAddress(cfg.HTTP, true); err != nil {
+		add("http", err.Error())
+	}
+	if strings.TrimSpace(cfg.HTTP) == "" {
+		add("http", "is required")
+	}
+	if strings.TrimSpace(cfg.HTTPS) != "" {
+		if err := validateNetworkAddress(cfg.HTTPS, true); err != nil {
+			add("https", err.Error())
+		}
+	}
+	if strings.TrimSpace(cfg.DoT) != "" {
+		if err := validateNetworkAddress(cfg.DoT, true); err != nil {
+			add("dot", err.Error())
+		}
+	}
+	if (strings.TrimSpace(cfg.HTTPS) != "" || strings.TrimSpace(cfg.DoT) != "") && (strings.TrimSpace(cfg.TLSCert) == "" || strings.TrimSpace(cfg.TLSKey) == "") {
+		add("tls", "certificate and key paths are required when HTTPS or DoT is enabled")
+	}
+	if len(cfg.Upstreams) == 0 && !cfg.ResolverDisabled {
+		add("upstreams", "at least one upstream is required unless resolver_disabled is enabled")
+	}
+	for i, upstream := range cfg.Upstreams {
+		if err := validateNetworkAddress(upstream, false); err != nil {
+			add(fmt.Sprintf("upstreams[%d]", i), err.Error())
+		}
+	}
+	for i, upstream := range cfg.DisabledUpstreams {
+		if err := validateNetworkAddress(upstream, false); err != nil {
+			add(fmt.Sprintf("disabled_upstreams[%d]", i), err.Error())
+		}
+	}
+	for i, record := range cfg.Records {
+		if err := validateRecord(record); err != nil {
+			add(fmt.Sprintf("records[%d]", i), err.Error())
+		}
+	}
+	if cfg.CacheSize < 0 || cfg.CacheSize > maxCacheEntries {
+		add("cache_size", fmt.Sprintf("must be between 0 and %d", maxCacheEntries))
+	}
+	if cfg.Cache && (cfg.CacheSize <= 0 || cfg.CacheTTL <= 0) {
+		add("cache", "cache_size and cache_ttl_seconds must be positive when caching is enabled")
+	}
+	if cfg.CacheTTL < 0 || cfg.CacheTTL > maxCacheTTL {
+		add("cache_ttl_seconds", fmt.Sprintf("must be between 0 and %d", maxCacheTTL))
+	}
+	if !validDNSName(cfg.PortalHost) {
+		add("portal_host", "must be a valid DNS name")
+	}
+	if net.ParseIP(strings.TrimSpace(cfg.PortalIP)) == nil {
+		add("portal_ip", "must be a valid IP address")
+	}
+	for i, item := range cfg.Whitelist {
+		if _, err := normalizeIPOrCIDR(item); err != nil {
+			add(fmt.Sprintf("whitelist[%d]", i), err.Error())
+		}
+	}
+	for i, item := range cfg.BlockedIPs {
+		if _, err := normalizeIPOrCIDR(item); err != nil {
+			add(fmt.Sprintf("blocked_ips[%d]", i), err.Error())
+		}
+	}
+	if cfg.RateLimit.Queries < 0 || cfg.RateLimit.Window < 0 {
+		add("rate_limit", "queries and window_seconds cannot be negative")
+	}
+	if cfg.RateLimit.Enabled && (cfg.RateLimit.Queries <= 0 || cfg.RateLimit.Window <= 0) {
+		add("rate_limit", "queries and window_seconds must be positive when enabled")
+	}
+	if action := strings.ToLower(strings.TrimSpace(cfg.RateLimit.Action)); action != "" && action != "nxdomain" && action != "drop" {
+		add("rate_limit.action", "must be nxdomain or drop")
+	}
+	if cfg.Anomaly.Hits < 0 || cfg.Anomaly.Window < 0 {
+		add("anomaly", "hits and window_seconds cannot be negative")
+	}
+	if cfg.Anomaly.Enabled && (cfg.Anomaly.Hits <= 0 || cfg.Anomaly.Window <= 0) {
+		add("anomaly", "hits and window_seconds must be positive when enabled")
+	}
+	if cfg.UpstreamHealth.Interval < 0 || cfg.UpstreamHealth.Timeout < 0 || cfg.UpstreamHealth.Failures < 0 {
+		add("upstream_health", "interval, timeout, and failures cannot be negative")
+	}
+	if cfg.UpstreamHealth.Enabled && (cfg.UpstreamHealth.Interval <= 0 || cfg.UpstreamHealth.Timeout <= 0 || cfg.UpstreamHealth.Failures <= 0) {
+		add("upstream_health", "interval, timeout, and failures must be positive when enabled")
+	}
+	if cfg.DirectOverrideTo != "" && !validDNSName(cfg.DirectOverrideTo) {
+		add("direct_override_to", "must be a valid DNS name")
+	}
+	for i, rule := range cfg.ConditionalForward {
+		if !validDNSName(rule.Suffix) {
+			add(fmt.Sprintf("conditional_forwarding[%d].suffix", i), "must be a valid DNS name")
+		}
+		if len(rule.Upstreams) == 0 {
+			add(fmt.Sprintf("conditional_forwarding[%d].upstreams", i), "must not be empty")
+		}
+		for j, upstream := range rule.Upstreams {
+			if err := validateNetworkAddress(upstream, false); err != nil {
+				add(fmt.Sprintf("conditional_forwarding[%d].upstreams[%d]", i, j), err.Error())
+			}
+		}
+	}
+	for i, item := range cfg.TrollIPv4 {
+		ip := net.ParseIP(strings.TrimSpace(item))
+		if ip == nil || ip.To4() == nil {
+			add(fmt.Sprintf("troll_ipv4[%d]", i), "must be an IPv4 address")
+		}
+	}
+	for i, item := range cfg.TrollIPv6 {
+		ip := net.ParseIP(strings.TrimSpace(item))
+		if ip == nil || ip.To4() != nil {
+			add(fmt.Sprintf("troll_ipv6[%d]", i), "must be an IPv6 address")
+		}
+	}
+	seenUsers := map[string]bool{}
+	for i, user := range cfg.Auth.Users {
+		if !validUsername(user.Username) {
+			add(fmt.Sprintf("auth.users[%d].username", i), "is invalid")
+		}
+		key := strings.ToLower(user.Username)
+		if seenUsers[key] {
+			add(fmt.Sprintf("auth.users[%d].username", i), "is duplicated")
+		}
+		seenUsers[key] = true
+		if user.Role != "admin" && user.Role != "viewer" {
+			add(fmt.Sprintf("auth.users[%d].role", i), "must be admin or viewer")
+		}
+		if strings.TrimSpace(user.PasswordHash) == "" {
+			add(fmt.Sprintf("auth.users[%d].password_hash", i), "is required")
+		}
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("invalid configuration: %s", strings.Join(issues, "; "))
+	}
+	return nil
+}
+
+func validateNetworkAddress(value string, allowEmptyHost bool) error {
+	value = strings.TrimSpace(value)
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("must be host:port")
+	}
+	if !allowEmptyHost && strings.TrimSpace(host) == "" {
+		return fmt.Errorf("host is required")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func validDNSName(value string) bool {
+	value = strings.TrimSuffix(strings.TrimSpace(value), ".")
+	if value == "" {
+		return false
+	}
+	_, ok := dns.IsDomainName(dns.Fqdn(value))
+	return ok
+}
+
+func validateRecord(record Record) error {
+	host := strings.TrimSuffix(strings.TrimSpace(record.Host), ".")
+	if !validDNSName(host) {
+		return fmt.Errorf("host is invalid")
+	}
+	value := strings.TrimSpace(record.Value)
+	if value == "" {
+		value = strings.TrimSpace(record.IP)
+	}
+	if value == "" {
+		return fmt.Errorf("value is required")
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	if recordType == "" {
+		if ip := net.ParseIP(value); ip != nil {
+			if ip.To4() != nil {
+				recordType = "A"
+			} else {
+				recordType = "AAAA"
+			}
+		} else {
+			return fmt.Errorf("type is required for non-IP values")
+		}
+	}
+	switch recordType {
+	case "A":
+		if ip := net.ParseIP(value); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("A value must be an IPv4 address")
+		}
+	case "AAAA":
+		if ip := net.ParseIP(value); ip == nil || ip.To4() != nil {
+			return fmt.Errorf("AAAA value must be an IPv6 address")
+		}
+	case "TXT":
+		if len(value) > 255 {
+			return fmt.Errorf("TXT value must be at most 255 bytes")
+		}
+	case "CNAME", "MX", "SRV", "PTR":
+		if !validDNSName(value) {
+			return fmt.Errorf("%s value must be a valid DNS name", recordType)
+		}
+	case "HTTPS", "SVCB":
+	default:
+		return fmt.Errorf("unsupported record type %q", recordType)
+	}
+	return nil
+}
+
 func loadConfig(path string) (Config, error) {
 	cfg := defaultConfig()
 	data, err := os.ReadFile(path)
@@ -1714,6 +1932,9 @@ func loadConfig(path string) (Config, error) {
 	}
 	if !cfg.Auth.Enabled && len(cfg.Auth.Users) == 0 {
 		cfg.Auth.Enabled = true
+	}
+	if err := validateConfig(cfg); err != nil {
+		return cfg, err
 	}
 	return cfg, err
 }
@@ -1807,8 +2028,17 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 }
 
 func (d *DNSLeaf) saveConfig() error {
+	d.cfgMu.RLock()
+	defer d.cfgMu.RUnlock()
+	return d.saveConfigLocked()
+}
+
+func (d *DNSLeaf) saveConfigLocked() error {
 	d.configSaveMu.Lock()
 	defer d.configSaveMu.Unlock()
+	if err := validateConfig(d.cfg); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(d.cfg, "", "  ")
 	if err != nil {
 		return err
@@ -1992,6 +2222,9 @@ func (d *DNSLeaf) startGravity(target string) error {
 	go func() {
 		d.cfgMu.Lock()
 		err := d.refreshBlocklistTarget(target)
+		if err == nil {
+			err = d.saveConfigLocked()
+		}
 		d.cfgMu.Unlock()
 		d.gravityMu.Lock()
 		d.gravityProgress.Running = false
@@ -2131,6 +2364,59 @@ func (d *DNSLeaf) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+type bufferedResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func newBufferedResponseWriter() *bufferedResponseWriter {
+	return &bufferedResponseWriter{header: make(http.Header)}
+}
+
+func (w *bufferedResponseWriter) Header() http.Header { return w.header }
+
+func (w *bufferedResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *bufferedResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(data)
+}
+
+func (w *bufferedResponseWriter) flush(dst http.ResponseWriter) {
+	for key, values := range w.header {
+		for _, value := range values {
+			dst.Header().Add(key, value)
+		}
+	}
+	status := w.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	dst.WriteHeader(status)
+	if w.body.Len() > 0 && status != http.StatusNoContent {
+		_, _ = dst.Write(w.body.Bytes())
+	}
+}
+
+func cloneConfig(cfg Config) (Config, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return Config{}, err
+	}
+	var clone Config
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return Config{}, err
+	}
+	return clone, nil
+}
+
 func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/dns-query" {
@@ -2143,11 +2429,40 @@ func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 			d.cfgMu.RLock()
 			defer d.cfgMu.RUnlock()
-		} else {
-			d.cfgMu.Lock()
-			defer d.cfgMu.Unlock()
+			next.ServeHTTP(w, r)
+			return
 		}
-		next.ServeHTTP(w, r)
+		if r.Header.Get("X-DNSLeaf-Request") != "1" {
+			http.Error(w, "missing X-DNSLeaf-Request header", http.StatusForbidden)
+			return
+		}
+		d.cfgMu.Lock()
+		defer d.cfgMu.Unlock()
+		before, err := cloneConfig(d.cfg)
+		if err != nil {
+			http.Error(w, "could not snapshot configuration", http.StatusInternalServerError)
+			return
+		}
+		buffered := newBufferedResponseWriter()
+		next.ServeHTTP(buffered, r)
+		status := buffered.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		if status >= 200 && status < 300 {
+			if err := validateConfig(d.cfg); err != nil {
+				d.cfg = before
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := d.saveConfigLocked(); err != nil {
+				d.cfg = before
+				http.Error(w, "could not save configuration", http.StatusInternalServerError)
+				return
+			}
+			d.clearCache()
+		}
+		buffered.flush(w)
 	})
 }
 
@@ -2364,9 +2679,13 @@ func (d *DNSLeaf) loadBlocklist() error {
 }
 
 func (d *DNSLeaf) loadLocalBlocklists() error {
-	return d.loadBlocklistFiltered(func(src BlocklistSource) bool {
+	err := d.loadBlocklistFiltered(func(src BlocklistSource) bool {
 		return !isRemoteBlocklistSource(src.Source)
 	}, false)
+	if err != nil {
+		return err
+	}
+	return d.saveConfig()
 }
 
 func (d *DNSLeaf) loadRemoteBlocklists() error {
@@ -2399,7 +2718,6 @@ func (d *DNSLeaf) loadBlocklistFilteredIndex(forceIndex int) error {
 		d.rebuildGravityListIndexesLocked(gravityByList)
 		d.blockMu.Unlock()
 	}
-	_ = d.saveConfig()
 	releaseGravityLoadMemory()
 	return nil
 }
@@ -2467,7 +2785,6 @@ func (d *DNSLeaf) loadBlocklistFiltered(include func(BlocklistSource) bool, forc
 		d.rebuildGravityListIndexesLocked(gravityByList)
 		d.blockMu.Unlock()
 	}
-	_ = d.saveConfig()
 	releaseGravityLoadMemory()
 	return nil
 }
@@ -3280,6 +3597,12 @@ func (d *DNSLeaf) getCached(key string) *dns.Msg {
 	return msg
 }
 
+func (d *DNSLeaf) clearCache() {
+	d.cacheMu.Lock()
+	d.cache = make(map[string]cacheEntry)
+	d.cacheMu.Unlock()
+}
+
 func (d *DNSLeaf) setCache(key string, msg *dns.Msg) {
 	if !d.cfg.Cache {
 		return
@@ -3295,12 +3618,62 @@ func (d *DNSLeaf) setCache(key string, msg *dns.Msg) {
 			break
 		}
 	}
-	ttl := time.Duration(d.cfg.CacheTTL) * time.Second
-	if len(msg.Answer) > 0 && msg.Answer[0].Header().Ttl > 0 {
-		ttl = time.Duration(msg.Answer[0].Header().Ttl) * time.Second
+	ttl := messageCacheTTL(msg, time.Duration(d.cfg.CacheTTL)*time.Second)
+	if ttl <= 0 {
+		return
 	}
 	now := time.Now()
 	d.cache[key] = cacheEntry{msg: msg.Copy(), storedAt: now, expiresAt: now.Add(ttl)}
+}
+
+func messageCacheTTL(msg *dns.Msg, configured time.Duration) time.Duration {
+	if msg == nil || configured <= 0 || msg.Truncated {
+		return 0
+	}
+	minTTL := uint32(^uint32(0))
+	found := false
+	var negativeSOA *dns.SOA
+	for _, section := range [][]dns.RR{msg.Answer, msg.Ns, msg.Extra} {
+		for _, rr := range section {
+			if rr == nil {
+				continue
+			}
+			if _, ok := rr.(*dns.OPT); ok {
+				continue
+			}
+			ttl := rr.Header().Ttl
+			if ttl == 0 {
+				return 0
+			}
+			if ttl < minTTL {
+				minTTL = ttl
+			}
+			if soa, ok := rr.(*dns.SOA); ok {
+				negativeSOA = soa
+			}
+			found = true
+		}
+	}
+	if !found {
+		return 0
+	}
+	negative := msg.Rcode == dns.RcodeNameError || (msg.Rcode == dns.RcodeSuccess && len(msg.Answer) == 0)
+	if negative {
+		if negativeSOA == nil {
+			return 0
+		}
+		if negativeSOA.Minttl < minTTL {
+			minTTL = negativeSOA.Minttl
+		}
+		if minTTL == 0 {
+			return 0
+		}
+	}
+	ttl := time.Duration(minTTL) * time.Second
+	if ttl > configured {
+		return configured
+	}
+	return ttl
 }
 
 func decrementMessageTTL(msg *dns.Msg, elapsed uint32) {
@@ -3893,26 +4266,28 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 		return m
 	}
 
-	cacheKey := fmt.Sprintf("%s:%d:%d", strings.ToLower(qname), q.Qtype, q.Qclass)
-	if cached := d.getCached(cacheKey); cached != nil {
-		if d.answerBlocked(cached) {
-			m := blockedResponse(r, qname, q.Qtype)
+	cacheKey, cacheable := cacheKeyForMessage(r)
+	if cacheable {
+		if cached := d.getCached(cacheKey); cached != nil {
+			if d.answerBlocked(cached) {
+				m := blockedResponse(r, qname, q.Qtype)
+				dur := time.Since(start)
+				d.addStat("blocked")
+				d.trackClient(clientIP, "blocked")
+				d.addLog(client, localAddr, transport, qname, qtypeStr, "blocked", dnsAnswers(cached), dur, "blocked-ip")
+				d.noteAnomaly(qname, "blocked-ip")
+				return m
+			}
+			cached.Id = r.Id
+			if len(cached.Question) > 0 {
+				cached.Question[0] = q
+			}
 			dur := time.Since(start)
-			d.addStat("blocked")
-			d.trackClient(clientIP, "blocked")
-			d.addLog(client, localAddr, transport, qname, qtypeStr, "blocked", dnsAnswers(cached), dur, "blocked-ip")
-			d.noteAnomaly(qname, "blocked-ip")
-			return m
+			d.addStat("cached")
+			d.trackClient(clientIP, "cached")
+			d.addLog(client, localAddr, transport, qname, qtypeStr, "cached", dnsAnswers(cached), dur)
+			return cached
 		}
-		cached.Id = r.Id
-		if len(cached.Question) > 0 {
-			cached.Question[0] = q
-		}
-		dur := time.Since(start)
-		d.addStat("cached")
-		d.trackClient(clientIP, "cached")
-		d.addLog(client, localAddr, transport, qname, qtypeStr, "cached", dnsAnswers(cached), dur)
-		return cached
 	}
 
 	resp := d.forward(r)
@@ -3935,10 +4310,30 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 	d.addStat(action)
 	d.trackClient(clientIP, action)
 	d.addLog(client, localAddr, transport, qname, qtypeStr, action, dnsAnswers(resp), dur)
-	if d.cfg.Cache && resp.Rcode != dns.RcodeServerFailure {
+	if cacheable && d.cfg.Cache && resp.Rcode != dns.RcodeServerFailure {
 		d.setCache(cacheKey, resp)
 	}
 	return resp
+}
+
+func cacheKeyForMessage(r *dns.Msg) (string, bool) {
+	if r == nil || len(r.Question) != 1 {
+		return "", false
+	}
+	opt := r.IsEdns0()
+	ednsSize := uint16(0)
+	ednsVersion := uint8(0)
+	ednsDO := false
+	if opt != nil {
+		if len(opt.Option) > 0 {
+			return "", false
+		}
+		ednsSize = opt.UDPSize()
+		ednsVersion = opt.Version()
+		ednsDO = opt.Do()
+	}
+	q := r.Question[0]
+	return fmt.Sprintf("%s:%d:%d:%t:%t:%t:%d:%d:%t", strings.ToLower(q.Name), q.Qtype, q.Qclass, r.RecursionDesired, r.CheckingDisabled, r.AuthenticatedData, ednsSize, ednsVersion, ednsDO), true
 }
 
 func (d *DNSLeaf) handleDoH(w http.ResponseWriter, r *http.Request) {
@@ -4127,7 +4522,6 @@ func (d *DNSLeaf) handleRecords(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		d.cfg.Records = append(d.cfg.Records, rec)
-		d.saveConfig()
 		writeJSON(w, rec)
 	case "PUT":
 		var body struct {
@@ -4160,7 +4554,6 @@ func (d *DNSLeaf) handleRecords(w http.ResponseWriter, r *http.Request) {
 		for i, rec := range d.cfg.Records {
 			if rec.IP == body.OldIP && strings.EqualFold(rec.Host, body.OldHost) {
 				d.cfg.Records[i] = Record{Host: host, Type: recType, Value: value, IP: value, Note: strings.TrimSpace(body.Note)}
-				d.saveConfig()
 				writeJSON(w, d.cfg.Records[i])
 				return
 			}
@@ -4178,7 +4571,6 @@ func (d *DNSLeaf) handleRecords(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4296,7 +4688,6 @@ func (d *DNSLeaf) importRecordsFromReader(r io.Reader, zone, origin string, over
 	if err := zp.Err(); err != nil {
 		return 0, 0, err
 	}
-	d.saveConfig()
 	return imported, skipped, nil
 }
 
@@ -4343,7 +4734,6 @@ func (d *DNSLeaf) handleBlocked(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			d.cfg.Blocked = append(d.cfg.Blocked, domain)
 		}
-		d.saveConfig()
 		writeJSON(w, map[string]string{"domain": domain})
 	case "DELETE":
 		var body struct {
@@ -4364,7 +4754,6 @@ func (d *DNSLeaf) handleBlocked(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.Blocked = next
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4395,7 +4784,6 @@ func (d *DNSLeaf) handleAllowed(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.Allowed = append(d.cfg.Allowed, domain)
-		d.saveConfig()
 		writeJSON(w, map[string]string{"domain": domain})
 	case "DELETE":
 		var body struct {
@@ -4413,7 +4801,6 @@ func (d *DNSLeaf) handleAllowed(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.Allowed = next
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4445,7 +4832,6 @@ func (d *DNSLeaf) handleBlockedIPs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.BlockedIPs = append(d.cfg.BlockedIPs, ip)
-		d.saveConfig()
 		writeJSON(w, map[string]string{"ip": ip})
 	case "DELETE":
 		var body struct {
@@ -4467,7 +4853,6 @@ func (d *DNSLeaf) handleBlockedIPs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.BlockedIPs = next
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4502,7 +4887,6 @@ func (d *DNSLeaf) handleRegexRules(w http.ResponseWriter, r *http.Request) {
 		d.addBlockedRuleLocked(rule, "regex")
 		d.blockMu.Unlock()
 		d.cfg.Blocked = ensureRule(d.cfg.Blocked, rule)
-		d.saveConfig()
 		writeJSON(w, map[string]string{"rule": rule})
 	case "DELETE":
 		var body struct {
@@ -4523,7 +4907,6 @@ func (d *DNSLeaf) handleRegexRules(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.Blocked = next
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4827,7 +5210,6 @@ func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			addr = addr + ":53"
 		}
 		d.cfg.Upstreams = append(d.cfg.Upstreams, addr)
-		d.saveConfig()
 		writeJSON(w, map[string]string{"address": addr})
 	case "PATCH":
 		var body struct {
@@ -4853,7 +5235,6 @@ func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			next = append(next, addr)
 		}
 		d.cfg.DisabledUpstreams = next
-		d.saveConfig()
 		writeJSON(w, map[string]interface{}{"address": addr, "enabled": body.Enabled})
 	case "DELETE":
 		var body struct {
@@ -4876,7 +5257,6 @@ func (d *DNSLeaf) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.DisabledUpstreams = next
-		d.saveConfig()
 		w.WriteHeader(204)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -4937,7 +5317,6 @@ func (d *DNSLeaf) handleClients(w http.ResponseWriter, r *http.Request) {
 			}
 			d.cfg.ClientProfiles[ip] = profile
 		}
-		d.saveConfig()
 		profileName, _, _ := d.profileForClient(ip)
 		writeJSON(w, map[string]interface{}{"ip": ip, "name": d.clientName(ip), "profile": profileName, "whitelisted": ipInList(ip, d.cfg.Whitelist)})
 	case "DELETE":
@@ -4969,7 +5348,6 @@ func (d *DNSLeaf) handleClients(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		d.cfg.Whitelist = next
-		d.saveConfig()
 		d.requestPersistentSave()
 		writeJSON(w, map[string]interface{}{"removed": ip})
 	default:
@@ -5044,7 +5422,6 @@ func (d *DNSLeaf) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		if body.DefaultProfile {
 			d.cfg.DefaultProfile = name
 		}
-		d.saveConfig()
 		writeJSON(w, map[string]interface{}{"name": name, "profile": body.Profile, "default_profile": d.cfg.DefaultProfile})
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -5084,7 +5461,6 @@ func (d *DNSLeaf) handleProfilePath(w http.ResponseWriter, r *http.Request) {
 			delete(d.cfg.ClientProfiles, ip)
 		}
 	}
-	d.saveConfig()
 	w.WriteHeader(204)
 }
 
@@ -5129,7 +5505,6 @@ func (d *DNSLeaf) handleClientProfilePath(w http.ResponseWriter, r *http.Request
 			}
 			d.cfg.ClientProfiles[ip] = profile
 		}
-		d.saveConfig()
 		profileName, _, _ := d.profileForClient(ip)
 		writeJSON(w, map[string]string{"ip": ip, "profile": profileName})
 	default:
@@ -5301,7 +5676,6 @@ func (d *DNSLeaf) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		ensureBuiltinProfiles(&d.cfg)
-		d.saveConfig()
 		writeJSON(w, d.cfg)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -5433,7 +5807,6 @@ func (d *DNSLeaf) handleSelfSignedTLS(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(body.HTTPS) != "" {
 			d.cfg.HTTPS = strings.TrimSpace(body.HTTPS)
 		}
-		d.saveConfig()
 	}
 	writeJSON(w, map[string]interface{}{"cert": certPath, "key": keyPath, "host": host, "https": d.cfg.HTTPS, "dns_names": dnsNames, "ip_addresses": ipStrings, "applied": applied, "is_ca": body.IsCA, "days": days})
 }
@@ -6021,11 +6394,6 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Role:         role,
 			CreatedAt:    time.Now().Format(time.RFC3339),
 		})
-		if err := d.saveConfig(); err != nil {
-			d.cfg.Auth.Users = d.cfg.Auth.Users[:len(d.cfg.Auth.Users)-1]
-			http.Error(w, "could not save user", http.StatusInternalServerError)
-			return
-		}
 		writeJSON(w, map[string]string{"username": username, "role": role})
 	case "PATCH":
 		var body struct {
@@ -6084,11 +6452,6 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 				d.cfg.Auth.Users[i].PasswordHash = passwordHash(body.Password)
 			}
 			updated := d.cfg.Auth.Users[i]
-			if err := d.saveConfig(); err != nil {
-				d.cfg.Auth.Users[i] = user
-				http.Error(w, "could not save user", http.StatusInternalServerError)
-				return
-			}
 			d.revokeUserSessions(user.Username)
 			writeJSON(w, map[string]string{"username": updated.Username, "role": updated.Role})
 			return
@@ -6115,13 +6478,7 @@ func (d *DNSLeaf) handleUsers(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "cannot remove the last administrator", 400)
 				return
 			}
-			users := append([]UserAuth(nil), d.cfg.Auth.Users...)
 			d.cfg.Auth.Users = append(d.cfg.Auth.Users[:i], d.cfg.Auth.Users[i+1:]...)
-			if err := d.saveConfig(); err != nil {
-				d.cfg.Auth.Users = users
-				http.Error(w, "could not save user", http.StatusInternalServerError)
-				return
-			}
 			d.revokeUserSessions(user.Username)
 			w.WriteHeader(204)
 			return
@@ -6753,6 +7110,7 @@ func (rc *remoteConsole) api(method, path string, body interface{}, out interfac
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set("X-DNSLeaf-Request", "1")
 	resp, err := rc.client.Do(req)
 	if err != nil {
 		return err
@@ -6946,8 +7304,16 @@ func (ui *consoleUI) runCommand(command string) {
 		if err := d.refreshBlocklistTarget(target); err != nil {
 			ui.appendLog(fmt.Sprintf("gravity failed: %v", err))
 		} else if target == "" {
+			if err := d.saveConfig(); err != nil {
+				ui.appendLog(fmt.Sprintf("gravity save failed: %v", err))
+				return
+			}
 			ui.appendLog("gravity updated")
 		} else {
+			if err := d.saveConfig(); err != nil {
+				ui.appendLog(fmt.Sprintf("gravity save failed: %v", err))
+				return
+			}
 			ui.appendLog("gravity updated " + target)
 		}
 	case "whitelist":
@@ -7542,6 +7908,12 @@ func (d *DNSLeaf) Stop() {
 
 func (d *DNSLeaf) Start(useTUI bool) error {
 	d.ensureAuth()
+	d.cfgMu.RLock()
+	if err := validateConfig(d.cfg); err != nil {
+		d.cfgMu.RUnlock()
+		return err
+	}
+	d.cfgMu.RUnlock()
 	if useTUI {
 		ui, err := newConsoleUI(d)
 		if err != nil {
@@ -7618,6 +7990,9 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 		d.consoleLogf("[DNSLeaf] updating remote blocklists in background")
 		d.cfgMu.Lock()
 		err := d.loadRemoteBlocklists()
+		if err == nil {
+			err = d.saveConfigLocked()
+		}
 		d.cfgMu.Unlock()
 		if err != nil {
 			d.consoleLogf("[DNSLeaf] remote blocklist error: %v", err)

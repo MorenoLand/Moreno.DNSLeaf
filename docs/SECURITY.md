@@ -6,6 +6,7 @@ DNSLeaf is a network service. Its safe defaults assume a private LAN, not an Int
 - Keep the administration panel on loopback or behind authenticated HTTPS and a firewall.
 - Treat `config.json`, `stats.json`, `gravity/`, and `certs/` as deployment state that may contain credentials, query history, or private keys.
 - Passwords are stored as salted PBKDF2-SHA-256 hashes. Failed logins are throttled, session cookies are HttpOnly/SameSite, and password or role changes revoke affected sessions.
+- State-changing web API requests require the `X-DNSLeaf-Request: 1` header. The bundled UI and remote console add it automatically; custom API clients must send it themselves. This reduces browser cross-site request risk but does not replace authentication or HTTPS.
 - Do not use browser password persistence for administrator credentials on shared systems.
 - Prefer trusted CA-issued certificates for remote administration. Self-signed certificates require separate trust installation on clients.
 - Enable the optional HTTP/SOCKS proxy listeners only when their bind addresses and client policy are deliberate; an intentionally enabled proxy can reach destinations on behalf of allowed clients.

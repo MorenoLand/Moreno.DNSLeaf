@@ -87,6 +87,98 @@ func TestCacheReturnsAgeAdjustedCopy(t *testing.T) {
 	}
 }
 
+func TestValidateConfig(t *testing.T) {
+	if err := validateConfig(defaultConfig()); err != nil {
+		t.Fatalf("default config rejected: %v", err)
+	}
+	cases := []struct {
+		name   string
+		change func(*Config)
+	}{
+		{name: "listener", change: func(cfg *Config) { cfg.Listen = "not-an-address" }},
+		{name: "record", change: func(cfg *Config) { cfg.Records = []Record{{Host: "router", Type: "A", Value: "not-an-ip"}} }},
+		{name: "cache", change: func(cfg *Config) { cfg.Cache = true; cfg.CacheSize = 0 }},
+		{name: "upstream", change: func(cfg *Config) { cfg.Upstreams = []string{"resolver"} }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			test.change(&cfg)
+			if err := validateConfig(cfg); err == nil {
+				t.Fatal("invalid config was accepted")
+			}
+		})
+	}
+}
+
+func TestMessageCacheTTLUsesMinimumAndNegativeTTL(t *testing.T) {
+	msg := new(dns.Msg)
+	msg.Answer = []dns.RR{
+		&dns.A{Hdr: dns.RR_Header{Ttl: 60}, A: netIPv4(192, 0, 2, 1)},
+		&dns.CNAME{Hdr: dns.RR_Header{Ttl: 10}, Target: "example.net."},
+	}
+	if got := messageCacheTTL(msg, 5*time.Minute); got != 10*time.Second {
+		t.Fatalf("positive cache TTL = %s, want 10s", got)
+	}
+	negative := new(dns.Msg)
+	negative.Rcode = dns.RcodeNameError
+	negative.Ns = []dns.RR{&dns.SOA{Hdr: dns.RR_Header{Ttl: 120}, Minttl: 30}}
+	if got := messageCacheTTL(negative, 5*time.Minute); got != 30*time.Second {
+		t.Fatalf("negative cache TTL = %s, want 30s", got)
+	}
+	empty := new(dns.Msg)
+	if got := messageCacheTTL(empty, 5*time.Minute); got != 0 {
+		t.Fatalf("empty response cache TTL = %s, want 0", got)
+	}
+}
+
+func TestCacheKeySeparatesEDNSProperties(t *testing.T) {
+	plain := new(dns.Msg)
+	plain.SetQuestion("example.com.", dns.TypeA)
+	plainKey, ok := cacheKeyForMessage(plain)
+	if !ok {
+		t.Fatal("plain query was not cacheable")
+	}
+	withEDNS := plain.Copy()
+	withEDNS.SetEdns0(1232, true)
+	ednsKey, ok := cacheKeyForMessage(withEDNS)
+	if !ok {
+		t.Fatal("EDNS query was not cacheable")
+	}
+	if plainKey == ednsKey {
+		t.Fatal("EDNS properties were omitted from cache key")
+	}
+	withOption := withEDNS.Copy()
+	withOption.IsEdns0().Option = []dns.EDNS0{&dns.EDNS0_PADDING{Padding: []byte{1}}}
+	if _, ok := cacheKeyForMessage(withOption); ok {
+		t.Fatal("query with EDNS option was cacheable")
+	}
+}
+
+func TestConfigGuardRollsBackFailedPersistence(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "keep"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDNSLeaf(defaultConfig(), configDir)
+	t.Cleanup(d.Stop)
+	before := len(d.cfg.Records)
+	handler := d.configGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.cfg.Records = append(d.cfg.Records, Record{Host: "test", Type: "A", Value: "192.0.2.1", IP: "192.0.2.1"})
+		writeJSON(w, map[string]bool{"ok": true})
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/test", strings.NewReader(`{}`))
+	req.Header.Set("X-DNSLeaf-Request", "1")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("failed persistence status = %d, want %d", res.Code, http.StatusInternalServerError)
+	}
+	if len(d.cfg.Records) != before {
+		t.Fatal("configuration mutation survived failed persistence")
+	}
+}
+
 func TestValidUsername(t *testing.T) {
 	for _, test := range []struct {
 		name  string
