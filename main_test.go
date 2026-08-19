@@ -260,6 +260,65 @@ func TestHealthAndReadinessEndpoints(t *testing.T) {
 	if res.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readiness status = %d, want %d before start", res.Code, http.StatusServiceUnavailable)
 	}
+	d.markDNSReady()
+	d.markDNSReady()
+	d.markHTTPReady()
+	res = httptest.NewRecorder()
+	d.handleReadyz(res, httptest.NewRequest(http.MethodGet, "/api/readyz", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("readiness status = %d, want %d after listeners start", res.Code, http.StatusOK)
+	}
+	d.markStartupFailure(os.ErrInvalid)
+	res = httptest.NewRecorder()
+	d.handleReadyz(res, httptest.NewRequest(http.MethodGet, "/api/readyz", nil))
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d after startup failure", res.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestPersistentStateErrorsAreVisible(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "stats.json")
+	if err := os.WriteFile(statePath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDNSLeaf(defaultConfig(), filepath.Join(dir, "config.json"))
+	if got := d.persistenceError(); got == "" {
+		t.Fatal("corrupt persistent state did not produce an error")
+	}
+	d.Stop()
+}
+
+func TestStartFailsWhenConfiguredHTTPAddressCannotBind(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	cfg := defaultConfig()
+	cfg.Listen = "127.0.0.1:0"
+	cfg.HTTP = occupied.Addr().String()
+	cfg.Upstreams = nil
+	cfg.Blocklists = nil
+	cfg.ResolverDisabled = true
+	cfg.Auth.Enabled = false
+	d := NewDNSLeaf(cfg, filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(d.Stop)
+	if err := d.Start(false); err == nil {
+		t.Fatal("startup succeeded with an occupied HTTP address")
+	}
+}
+
+func TestResolverDisabledStillEnforcesClientPolicy(t *testing.T) {
+	d := newTestLeaf(t)
+	d.cfg.ResolverDisabled = true
+	d.cfg.LANOnly = true
+	query := new(dns.Msg)
+	query.SetQuestion("example.com.", dns.TypeA)
+	response := d.resolveDNS(query, "203.0.113.7:53000", "", "test")
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("resolver-disabled response rcode = %d, want REFUSED", response.Rcode)
+	}
 }
 
 func TestConfigSchemaMigration(t *testing.T) {

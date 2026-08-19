@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -327,6 +328,8 @@ type DNSLeaf struct {
 	stateStopCh        chan struct{}
 	stateDoneCh        chan struct{}
 	stateStopOnce      sync.Once
+	persistenceMu      sync.RWMutex
+	persistenceErr     string
 	stopCh             chan struct{}
 	stopMu             sync.Mutex
 	stopOnce           sync.Once
@@ -334,7 +337,12 @@ type DNSLeaf struct {
 	dnsServers         []*dns.Server
 	httpServers        []*http.Server
 	proxyListeners     []net.Listener
+	httpListeners      []net.Listener
 	serversMu          sync.Mutex
+	readyMu            sync.RWMutex
+	dnsReady           int
+	httpReady          int
+	startupErr         string
 	ui                 *consoleUI
 	started            time.Time
 	cfgPath            string
@@ -2073,15 +2081,40 @@ func (d *DNSLeaf) saveConfigLocked() error {
 	return atomicWriteFile(d.cfgPath, data, 0600)
 }
 
+func (d *DNSLeaf) setPersistenceError(err error) {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	d.persistenceMu.Lock()
+	changed := d.persistenceErr != message
+	d.persistenceErr = message
+	d.persistenceMu.Unlock()
+	if changed && message != "" {
+		d.addServerLog("persistent state error: " + message)
+	}
+}
+
+func (d *DNSLeaf) persistenceError() string {
+	d.persistenceMu.RLock()
+	defer d.persistenceMu.RUnlock()
+	return d.persistenceErr
+}
+
 func (d *DNSLeaf) loadPersistentState() {
 	data, err := os.ReadFile(d.statePath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			d.setPersistenceError(err)
+		}
 		return
 	}
 	var state PersistentState
-	if json.Unmarshal(data, &state) != nil {
+	if err := json.Unmarshal(data, &state); err != nil {
+		d.setPersistenceError(fmt.Errorf("decode %s: %w", d.statePath, err))
 		return
 	}
+	d.setPersistenceError(nil)
 	d.stats = state.Stats
 	if len(state.Log) > 200 {
 		state.Log = state.Log[len(state.Log)-200:]
@@ -2110,7 +2143,7 @@ func (d *DNSLeaf) loadPersistentState() {
 	}
 }
 
-func (d *DNSLeaf) savePersistentState() {
+func (d *DNSLeaf) savePersistentState() error {
 	d.statsMu.Lock()
 	stats := d.stats
 	d.statsMu.Unlock()
@@ -2141,9 +2174,15 @@ func (d *DNSLeaf) savePersistentState() {
 	d.clientsMu.Unlock()
 	data, err := json.MarshalIndent(PersistentState{Stats: stats, Log: logCopy, Clients: clientsCopy}, "", "  ")
 	if err != nil {
-		return
+		d.setPersistenceError(err)
+		return err
 	}
-	_ = atomicWriteFile(d.statePath, data, 0600)
+	if err := atomicWriteFile(d.statePath, data, 0600); err != nil {
+		d.setPersistenceError(err)
+		return err
+	}
+	d.setPersistenceError(nil)
+	return nil
 }
 
 func (d *DNSLeaf) requestPersistentSave() {
@@ -2168,7 +2207,7 @@ func (d *DNSLeaf) persistentStateLoop() {
 					default:
 					}
 				}
-				d.savePersistentState()
+				_ = d.savePersistentState()
 				return
 			}
 			drain := true
@@ -2179,9 +2218,9 @@ func (d *DNSLeaf) persistentStateLoop() {
 					drain = false
 				}
 			}
-			d.savePersistentState()
+			_ = d.savePersistentState()
 		case <-d.stateStopCh:
-			d.savePersistentState()
+			_ = d.savePersistentState()
 			return
 		}
 	}
@@ -4292,16 +4331,6 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 		return m
 	}
 
-	if d.cfg.ResolverDisabled {
-		resp := d.forward(r)
-		resp.Compress = true
-		dur := time.Since(start)
-		d.addStat("forwarded")
-		d.trackClient(clientIP, "forwarded")
-		d.addLog(client, localAddr, transport, qname, qtypeStr, "forwarded", dnsAnswers(resp), dur)
-		return resp
-	}
-
 	if d.rateLimited(clientIP) {
 		m := new(dns.Msg)
 		if strings.EqualFold(d.cfg.RateLimit.Action, "drop") {
@@ -4335,6 +4364,16 @@ func (d *DNSLeaf) resolveDNS(r *dns.Msg, client, localAddr, transport string) *d
 		d.trackClient(clientIP, "denied")
 		d.addLog(client, localAddr, transport, qname, qtypeStr, "denied", "", dur)
 		return m
+	}
+
+	if d.cfg.ResolverDisabled {
+		resp := d.forward(r)
+		resp.Compress = true
+		dur := time.Since(start)
+		d.addStat("forwarded")
+		d.trackClient(clientIP, "forwarded")
+		d.addLog(client, localAddr, transport, qname, qtypeStr, "forwarded", dnsAnswers(resp), dur)
+		return resp
 	}
 
 	if safe := d.safeSearchResponse(r, qname, q.Qtype, clientIP); safe != nil {
@@ -4523,20 +4562,21 @@ func (d *DNSLeaf) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	d.serversMu.Lock()
-	dnsListeners := len(d.dnsServers)
-	httpListeners := len(d.httpServers)
-	d.serversMu.Unlock()
+	d.readyMu.RLock()
+	dnsListeners := d.dnsReady
+	httpListeners := d.httpReady
+	startupErr := d.startupErr
+	d.readyMu.RUnlock()
 	d.cfgMu.RLock()
 	resolverDisabled := d.cfg.ResolverDisabled
 	activeUpstreams := len(d.activeUpstreams())
 	d.cfgMu.RUnlock()
-	ready := !d.isStopping() && dnsListeners >= 2 && httpListeners >= 1 && (resolverDisabled || activeUpstreams > 0)
+	ready := !d.isStopping() && startupErr == "" && dnsListeners >= 2 && httpListeners >= 1 && (resolverDisabled || activeUpstreams > 0)
 	status := http.StatusOK
 	if !ready {
 		status = http.StatusServiceUnavailable
 	}
-	writeJSONStatus(w, status, map[string]interface{}{"app": "dnsleaf", "ready": ready, "dns_listeners": dnsListeners, "http_listeners": httpListeners, "active_upstreams": activeUpstreams})
+	writeJSONStatus(w, status, map[string]interface{}{"app": "dnsleaf", "ready": ready, "dns_listeners": dnsListeners, "http_listeners": httpListeners, "active_upstreams": activeUpstreams, "startup_error": startupErr})
 }
 
 func (d *DNSLeaf) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -4564,6 +4604,7 @@ func (d *DNSLeaf) handleStatus(w http.ResponseWriter, r *http.Request) {
 	d.blockMu.RUnlock()
 	writeJSON(w, map[string]interface{}{
 		"uptime":            time.Since(d.started).Truncate(time.Second).String(),
+		"persistence_error": d.persistenceError(),
 		"stats":             s,
 		"blocked_count":     bc,
 		"blocklist_count":   len(d.cfg.Blocklists),
@@ -7801,9 +7842,16 @@ func (ui *consoleUI) runUpstreamCommand(args []string) {
 
 func (d *DNSLeaf) serveHTTPProxy(addr string) error {
 	srv := newHTTPServer(addr, http.HandlerFunc(d.handleHTTPProxy), log.New(serverLogWriter{dad: d}, "", 0))
-	d.registerHTTPServer(srv)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	d.registerHTTPServer(srv, listener)
 	d.consoleLogf("[DNSLeaf] HTTP proxy listening on %s", addr)
-	return srv.ListenAndServe()
+	if err := srv.Serve(listener); err != nil && !d.isStopping() && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func (d *DNSLeaf) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
@@ -8025,6 +8073,12 @@ func (d *DNSLeaf) registerDNSServer(server *dns.Server) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = server.ShutdownContext(ctx)
 		cancel()
+		if server.PacketConn != nil {
+			_ = server.PacketConn.Close()
+		}
+		if server.Listener != nil {
+			_ = server.Listener.Close()
+		}
 		return
 	}
 	d.dnsServers = append(d.dnsServers, server)
@@ -8032,18 +8086,24 @@ func (d *DNSLeaf) registerDNSServer(server *dns.Server) {
 	d.stopMu.Unlock()
 }
 
-func (d *DNSLeaf) registerHTTPServer(server *http.Server) {
+func (d *DNSLeaf) registerHTTPServer(server *http.Server, listener net.Listener) {
 	d.stopMu.Lock()
 	d.serversMu.Lock()
 	if d.stopped {
 		d.serversMu.Unlock()
 		d.stopMu.Unlock()
+		if listener != nil {
+			_ = listener.Close()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = server.Shutdown(ctx)
 		cancel()
 		return
 	}
 	d.httpServers = append(d.httpServers, server)
+	if listener != nil {
+		d.httpListeners = append(d.httpListeners, listener)
+	}
 	d.serversMu.Unlock()
 	d.stopMu.Unlock()
 }
@@ -8070,15 +8130,26 @@ func (d *DNSLeaf) Stop() {
 		d.serversMu.Lock()
 		dnsServers := append([]*dns.Server(nil), d.dnsServers...)
 		httpServers := append([]*http.Server(nil), d.httpServers...)
+		httpListeners := append([]net.Listener(nil), d.httpListeners...)
 		proxyListeners := append([]net.Listener(nil), d.proxyListeners...)
 		d.serversMu.Unlock()
 		d.stopMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		for _, server := range dnsServers {
-			_ = server.ShutdownContext(ctx)
+			if err := server.ShutdownContext(ctx); err != nil {
+				if server.PacketConn != nil {
+					_ = server.PacketConn.Close()
+				}
+				if server.Listener != nil {
+					_ = server.Listener.Close()
+				}
+			}
 		}
 		for _, server := range httpServers {
 			_ = server.Shutdown(ctx)
+		}
+		for _, listener := range httpListeners {
+			_ = listener.Close()
 		}
 		for _, listener := range proxyListeners {
 			_ = listener.Close()
@@ -8089,6 +8160,27 @@ func (d *DNSLeaf) Stop() {
 		}
 		d.stopPersistentState()
 	})
+}
+
+func (d *DNSLeaf) markDNSReady() {
+	d.readyMu.Lock()
+	d.dnsReady++
+	d.readyMu.Unlock()
+}
+
+func (d *DNSLeaf) markHTTPReady() {
+	d.readyMu.Lock()
+	d.httpReady++
+	d.readyMu.Unlock()
+}
+
+func (d *DNSLeaf) markStartupFailure(err error) {
+	if err == nil {
+		return
+	}
+	d.readyMu.Lock()
+	d.startupErr = err.Error()
+	d.readyMu.Unlock()
 }
 
 func (d *DNSLeaf) Start(useTUI bool) error {
@@ -8114,42 +8206,95 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	d.cfgMu.RLock()
 	cfg := d.cfg
 	d.cfgMu.RUnlock()
-	dns.HandleFunc(".", d.HandleDNS)
+	var dotTLSConfig *tls.Config
+	var httpsTLSConfig *tls.Config
+	if cfg.DoT != "" || cfg.HTTPS != "" {
+		cert, err := tls.LoadX509KeyPair(d.runtimePath(cfg.TLSCert), d.runtimePath(cfg.TLSKey))
+		if err != nil {
+			return fmt.Errorf("TLS certificate: %w", err)
+		}
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+		if cfg.DoT != "" {
+			dotTLSConfig = tlsConfig.Clone()
+		}
+		if cfg.HTTPS != "" {
+			httpsTLSConfig = tlsConfig.Clone()
+		}
+	}
+	udpConn, err := net.ListenPacket("udp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("UDP: %w", err)
+	}
+	tcpListener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		_ = udpConn.Close()
+		return fmt.Errorf("TCP: %w", err)
+	}
+	httpListener, err := net.Listen("tcp", cfg.HTTP)
+	if err != nil {
+		_ = udpConn.Close()
+		_ = tcpListener.Close()
+		return fmt.Errorf("HTTP: %w", err)
+	}
+	var httpsListener net.Listener
+	if cfg.HTTPS != "" {
+		rawListener, listenErr := net.Listen("tcp", cfg.HTTPS)
+		if listenErr != nil {
+			_ = udpConn.Close()
+			_ = tcpListener.Close()
+			_ = httpListener.Close()
+			return fmt.Errorf("HTTPS: %w", listenErr)
+		}
+		httpsListener = tls.NewListener(rawListener, httpsTLSConfig)
+	}
+	var dotListener net.Listener
+	if cfg.DoT != "" {
+		rawListener, listenErr := net.Listen("tcp", cfg.DoT)
+		if listenErr != nil {
+			_ = udpConn.Close()
+			_ = tcpListener.Close()
+			_ = httpListener.Close()
+			if httpsListener != nil {
+				_ = httpsListener.Close()
+			}
+			return fmt.Errorf("DoT: %w", listenErr)
+		}
+		dotListener = tls.NewListener(rawListener, dotTLSConfig)
+	}
 
-	udpServer := &dns.Server{Addr: cfg.Listen, Net: "udp"}
-	tcpServer := &dns.Server{Addr: cfg.Listen, Net: "tcp"}
+	errCh := make(chan error, 8)
+	dnsHandler := dns.HandlerFunc(d.HandleDNS)
+	udpServer := &dns.Server{Addr: cfg.Listen, Net: "udp", PacketConn: udpConn, Handler: dnsHandler, NotifyStartedFunc: d.markDNSReady}
+	tcpServer := &dns.Server{Addr: cfg.Listen, Net: "tcp", Listener: tcpListener, Handler: dnsHandler, NotifyStartedFunc: d.markDNSReady}
 	d.registerDNSServer(udpServer)
 	d.registerDNSServer(tcpServer)
-
-	errCh := make(chan error, 6)
 	go func() {
 		d.consoleLogf("[DNSLeaf] DNS listening on %s (UDP)", cfg.Listen)
-		if err := udpServer.ListenAndServe(); err != nil && !d.isStopping() {
-			errCh <- fmt.Errorf("UDP: %w", err)
+		if err := udpServer.ActivateAndServe(); err != nil && !d.isStopping() {
+			wrapped := fmt.Errorf("UDP: %w", err)
+			d.markStartupFailure(wrapped)
+			errCh <- wrapped
 		}
 	}()
 	go func() {
 		d.consoleLogf("[DNSLeaf] DNS listening on %s (TCP)", cfg.Listen)
-		if err := tcpServer.ListenAndServe(); err != nil && !d.isStopping() {
-			errCh <- fmt.Errorf("TCP: %w", err)
+		if err := tcpServer.ActivateAndServe(); err != nil && !d.isStopping() {
+			wrapped := fmt.Errorf("TCP: %w", err)
+			d.markStartupFailure(wrapped)
+			errCh <- wrapped
 		}
 	}()
-	if cfg.DoT != "" && cfg.TLSCert != "" && cfg.TLSKey != "" {
-		dotServer := &dns.Server{Addr: cfg.DoT, Net: "tcp-tls", TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-		dotServer.TLSConfig.Certificates = make([]tls.Certificate, 1)
-		cert, err := tls.LoadX509KeyPair(d.runtimePath(cfg.TLSCert), d.runtimePath(cfg.TLSKey))
-		if err != nil {
-			d.consoleLogf("[DNSLeaf] DoT TLS error: %v", err)
-		} else {
-			d.registerDNSServer(dotServer)
-			dotServer.TLSConfig.Certificates[0] = cert
-			go func() {
-				d.consoleLogf("[DNSLeaf] DNS-over-TLS listening on %s", cfg.DoT)
-				if err := dotServer.ListenAndServe(); err != nil && !d.isStopping() {
-					errCh <- fmt.Errorf("DoT: %w", err)
-				}
-			}()
-		}
+	if dotListener != nil {
+		dotServer := &dns.Server{Addr: cfg.DoT, Net: "tcp-tls", Listener: dotListener, TLSConfig: dotTLSConfig, Handler: dnsHandler, NotifyStartedFunc: d.markDNSReady}
+		d.registerDNSServer(dotServer)
+		go func() {
+			d.consoleLogf("[DNSLeaf] DNS-over-TLS listening on %s", cfg.DoT)
+			if err := dotServer.ActivateAndServe(); err != nil && !d.isStopping() {
+				wrapped := fmt.Errorf("DoT: %w", err)
+				d.markStartupFailure(wrapped)
+				errCh <- wrapped
+			}
+		}()
 	}
 	if cfg.HTTPProxyEnabled && strings.TrimSpace(cfg.HTTPProxy) != "" {
 		go func() {
@@ -8226,20 +8371,26 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 
 	handler := securityHeaders(d.configGuard(d.requireAuth(mux)))
 	httpServer := newHTTPServer(cfg.HTTP, handler, log.New(serverLogWriter{dad: d}, "", 0))
-	d.registerHTTPServer(httpServer)
+	d.registerHTTPServer(httpServer, httpListener)
+	d.markHTTPReady()
 	go func() {
 		d.consoleLogf("[DNSLeaf] Web UI at %s or %s", webURL(cfg.HTTP), portalURL(cfg.PortalHost, cfg.HTTPS, cfg.HTTP))
-		if err := httpServer.ListenAndServe(); err != nil && !d.isStopping() {
-			errCh <- fmt.Errorf("HTTP: %w", err)
+		if err := httpServer.Serve(httpListener); err != nil && !d.isStopping() && !errors.Is(err, http.ErrServerClosed) {
+			wrapped := fmt.Errorf("HTTP: %w", err)
+			d.markStartupFailure(wrapped)
+			errCh <- wrapped
 		}
 	}()
-	if cfg.HTTPS != "" && cfg.TLSCert != "" && cfg.TLSKey != "" {
+	if httpsListener != nil {
 		httpsServer := newHTTPServer(cfg.HTTPS, handler, log.New(serverLogWriter{dad: d}, "", 0))
-		d.registerHTTPServer(httpsServer)
+		d.registerHTTPServer(httpsServer, httpsListener)
+		d.markHTTPReady()
 		go func() {
 			d.consoleLogf("[DNSLeaf] HTTPS Web UI at %s or %s", webURL(cfg.HTTPS), portalURL(cfg.PortalHost, cfg.HTTPS, cfg.HTTP))
-			if err := httpsServer.ListenAndServeTLS(d.runtimePath(cfg.TLSCert), d.runtimePath(cfg.TLSKey)); err != nil && !d.isStopping() {
-				errCh <- fmt.Errorf("HTTPS: %w", err)
+			if err := httpsServer.Serve(httpsListener); err != nil && !d.isStopping() && !errors.Is(err, http.ErrServerClosed) {
+				wrapped := fmt.Errorf("HTTPS: %w", err)
+				d.markStartupFailure(wrapped)
+				errCh <- wrapped
 			}
 		}()
 	}
@@ -8252,7 +8403,7 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	upstreamCount := len(d.cfg.Upstreams)
 	d.cfgMu.RUnlock()
 	d.consoleLogf("[DNSLeaf] %d blocked domains, %d local records, %d upstreams", bc, recordCount, upstreamCount)
-	d.consoleLogf("[DNSLeaf] ready")
+	d.consoleLogf("[DNSLeaf] listeners bound; waiting for serving loops")
 
 	if d.ui == nil {
 		select {
