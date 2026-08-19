@@ -84,7 +84,14 @@ type BlocklistSource struct {
 	Groups        []string `json:"groups,omitempty"`
 	LastLoaded    int      `json:"last_loaded"`
 	LastError     string   `json:"last_error,omitempty"`
+	LastChecked   string   `json:"last_checked,omitempty"`
 	LastRefreshed string   `json:"last_refreshed,omitempty"`
+	CacheAge      int64    `json:"cache_age_seconds,omitempty"`
+}
+
+type UpstreamEndpoint struct {
+	URL        string `json:"url"`
+	ServerName string `json:"server_name,omitempty"`
 }
 
 type BlockGroup struct {
@@ -204,10 +211,12 @@ type Config struct {
 	Allowed            []string                 `json:"allowed"`
 	Blocklist          string                   `json:"blocklist_file"`
 	Blocklists         []BlocklistSource        `json:"blocklists"`
+	UpstreamEndpoints  []UpstreamEndpoint       `json:"upstream_endpoints,omitempty"`
 	BlockGroups        []BlockGroup             `json:"block_groups"`
 	Cache              bool                     `json:"cache_enabled"`
 	CacheSize          int                      `json:"cache_size"`
 	CacheTTL           int                      `json:"cache_ttl_seconds"`
+	StripECS           bool                     `json:"strip_ecs"`
 	PortalHost         string                   `json:"portal_host"`
 	PortalIP           string                   `json:"portal_ip"`
 	LANOnly            bool                     `json:"lan_only"`
@@ -297,6 +306,8 @@ type DNSLeaf struct {
 	blocked            map[string]bool
 	blockedSrc         map[string]string
 	blockedPat         []string
+	ruleCacheMu        sync.RWMutex
+	ruleCache          map[string]*regexp.Regexp
 	gravity            []string
 	gravityByList      map[string][]uint32
 	blockMu            sync.RWMutex
@@ -1511,10 +1522,12 @@ func defaultConfig() Config {
 		Allowed:            []string{},
 		Blocklist:          "blocklist.txt",
 		Blocklists:         []BlocklistSource{{Name: "Local blocklist", Source: "blocklist.txt", Enabled: true}},
+		UpstreamEndpoints:  []UpstreamEndpoint{},
 		BlockGroups:        []BlockGroup{},
 		Cache:              true,
 		CacheSize:          1000,
 		CacheTTL:           300,
+		StripECS:           true,
 		PortalHost:         "dns.leaf",
 		PortalIP:           "127.0.0.1",
 		LANOnly:            true,
@@ -1651,6 +1664,8 @@ const (
 	maxAnomalyEntries = 10000
 	maxLoginEntries   = 10000
 	maxSessions       = 1024
+	maxRuleCache      = 4096
+	maxDomainRuleLen  = 4096
 )
 
 func validateConfig(cfg Config) error {
@@ -1681,12 +1696,17 @@ func validateConfig(cfg Config) error {
 	if (strings.TrimSpace(cfg.HTTPS) != "" || strings.TrimSpace(cfg.DoT) != "") && (strings.TrimSpace(cfg.TLSCert) == "" || strings.TrimSpace(cfg.TLSKey) == "") {
 		add("tls", "certificate and key paths are required when HTTPS or DoT is enabled")
 	}
-	if len(cfg.Upstreams) == 0 && !cfg.ResolverDisabled {
-		add("upstreams", "at least one upstream is required unless resolver_disabled is enabled")
+	if len(cfg.Upstreams) == 0 && len(cfg.UpstreamEndpoints) == 0 && !cfg.ResolverDisabled {
+		add("upstreams", "at least one upstream or upstream endpoint is required unless resolver_disabled is enabled")
 	}
 	for i, upstream := range cfg.Upstreams {
 		if err := validateNetworkAddress(upstream, false); err != nil {
 			add(fmt.Sprintf("upstreams[%d]", i), err.Error())
+		}
+	}
+	for i, endpoint := range cfg.UpstreamEndpoints {
+		if err := validateUpstreamEndpoint(endpoint); err != nil {
+			add(fmt.Sprintf("upstream_endpoints[%d]", i), err.Error())
 		}
 	}
 	for i, upstream := range cfg.DisabledUpstreams {
@@ -1822,6 +1842,77 @@ func validateNetworkAddress(value string, allowEmptyHost bool) error {
 	return nil
 }
 
+type upstreamRoute struct {
+	scheme     string
+	address    string
+	url        string
+	serverName string
+}
+
+func parseUpstreamEndpoint(endpoint UpstreamEndpoint) (upstreamRoute, error) {
+	route := upstreamRoute{}
+	raw := strings.TrimSpace(endpoint.URL)
+	if raw == "" {
+		return route, fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return route, fmt.Errorf("must be a URL with a supported scheme")
+	}
+	route.scheme = strings.ToLower(u.Scheme)
+	switch route.scheme {
+	case "udp", "tcp", "tls":
+		if u.Path != "" || u.RawQuery != "" {
+			return route, fmt.Errorf("%s endpoint cannot contain a path or query", route.scheme)
+		}
+		port := u.Port()
+		if port == "" {
+			if route.scheme == "tls" {
+				port = "853"
+			} else {
+				port = "53"
+			}
+		}
+		route.address = net.JoinHostPort(u.Hostname(), port)
+		if err := validateNetworkAddress(route.address, false); err != nil {
+			return route, err
+		}
+		if route.scheme == "tls" {
+			route.serverName = strings.TrimSpace(endpoint.ServerName)
+			if route.serverName == "" {
+				route.serverName = u.Hostname()
+			}
+			if net.ParseIP(route.serverName) != nil {
+				if strings.TrimSpace(endpoint.ServerName) == "" {
+					return route, fmt.Errorf("server_name is required when a TLS endpoint uses an IP address")
+				}
+			} else if !validDNSName(route.serverName) {
+				return route, fmt.Errorf("server_name must be a valid DNS name")
+			}
+		}
+	case "https":
+		if u.Path == "" {
+			u.Path = "/dns-query"
+		}
+		if net.ParseIP(u.Hostname()) == nil && !validDNSName(u.Hostname()) {
+			return route, fmt.Errorf("host must be a valid DNS name or IP address")
+		}
+		if serverName := strings.TrimSpace(endpoint.ServerName); serverName != "" && net.ParseIP(serverName) == nil && !validDNSName(serverName) {
+			return route, fmt.Errorf("server_name must be a valid DNS name")
+		}
+		route.url = u.String()
+		route.serverName = strings.TrimSpace(endpoint.ServerName)
+	default:
+		return route, fmt.Errorf("scheme must be udp, tcp, tls, or https")
+	}
+	return route, nil
+}
+
+func validateUpstreamEndpoint(endpoint UpstreamEndpoint) error {
+	_, err := parseUpstreamEndpoint(endpoint)
+	return err
+}
+
 func validDNSName(value string) bool {
 	value = strings.TrimSuffix(strings.TrimSpace(value), ".")
 	if value == "" {
@@ -1873,6 +1964,9 @@ func validateRecord(record Record) error {
 			return fmt.Errorf("%s value must be a valid DNS name", recordType)
 		}
 	case "HTTPS", "SVCB":
+		if _, err := dns.NewRR(fmt.Sprintf("%s 300 IN %s %s", dns.Fqdn(host), recordType, value)); err != nil {
+			return fmt.Errorf("%s value is invalid: %w", recordType, err)
+		}
 	default:
 		return fmt.Errorf("unsupported record type %q", recordType)
 	}
@@ -1983,6 +2077,7 @@ func NewDNSLeaf(cfg Config, cfgPath string) *DNSLeaf {
 		cfg:                cfg,
 		blocked:            make(map[string]bool),
 		blockedSrc:         make(map[string]string),
+		ruleCache:          make(map[string]*regexp.Regexp),
 		gravityByList:      make(map[string][]uint32),
 		cache:              make(map[string]cacheEntry),
 		log:                make([]QueryEntry, 0, 200),
@@ -2553,6 +2648,9 @@ func isRemoteBlocklistSource(source string) bool {
 	return strings.HasPrefix(strings.TrimSpace(source), "http://") || strings.HasPrefix(strings.TrimSpace(source), "https://")
 }
 
+const maxBlocklistBytes = 50 * 1024 * 1024
+const blocklistCacheMaxAge = 24 * time.Hour
+
 func gravityCacheName(source string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(source)))
 	return fmt.Sprintf("%x.list", sum[:])
@@ -2570,8 +2668,10 @@ func (d *DNSLeaf) readBlocklistSource(source string, forceRemote bool) ([]byte, 
 	}
 	cachePath := d.gravityCachePath(source)
 	if !forceRemote {
-		if data, err := os.ReadFile(cachePath); err == nil {
-			return data, true, nil
+		if info, err := os.Stat(cachePath); err == nil && time.Since(info.ModTime()) < blocklistCacheMaxAge {
+			if data, readErr := os.ReadFile(cachePath); readErr == nil {
+				return data, true, nil
+			}
 		}
 	}
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -2590,8 +2690,18 @@ func (d *DNSLeaf) readBlocklistSource(source string, forceRemote bool) ([]byte, 
 		}
 		return nil, false, err
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBlocklistBytes+1))
 	if err != nil {
+		if cached, readErr := os.ReadFile(cachePath); readErr == nil {
+			return cached, true, fmt.Errorf("%w; using cached copy", err)
+		}
+		return nil, false, err
+	}
+	if len(data) > maxBlocklistBytes {
+		err := fmt.Errorf("blocklist exceeds %d MiB", maxBlocklistBytes/(1024*1024))
+		if cached, readErr := os.ReadFile(cachePath); readErr == nil {
+			return cached, true, fmt.Errorf("%w; using cached copy", err)
+		}
 		return nil, false, err
 	}
 	if err := os.MkdirAll(d.gravityDir, 0700); err == nil {
@@ -2717,25 +2827,57 @@ func wildcardRulePattern(rule string) string {
 	return "^" + strings.Join(parts, ".*") + "$"
 }
 
+func compileDomainRule(rule string) (*regexp.Regexp, error) {
+	rule = normalizeDomainRule(rule)
+	if !isPatternRule(rule) {
+		return nil, nil
+	}
+	pattern := rule
+	if isRegexRule(rule) {
+		pattern = regexRulePattern(rule)
+	} else {
+		pattern = wildcardRulePattern(rule)
+	}
+	return regexp.Compile(pattern)
+}
+
 func domainRuleMatches(rule, name string) bool {
 	rule = normalizeDomainRule(rule)
 	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
 	if rule == "" || name == "" {
 		return false
 	}
-	if isRegexRule(rule) {
-		re := regexRulePattern(rule)
-		if re == "" {
-			return false
-		}
-		ok, err := regexp.MatchString(re, name)
-		return err == nil && ok
-	}
-	if strings.Contains(rule, "*") {
-		ok, err := regexp.MatchString(wildcardRulePattern(rule), name)
-		return err == nil && ok
+	if re, err := compileDomainRule(rule); err == nil && re != nil {
+		return re.MatchString(name)
 	}
 	return rule == name
+}
+
+func (d *DNSLeaf) domainRuleMatches(rule, name string) bool {
+	rule = normalizeDomainRule(rule)
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	if rule == "" || name == "" {
+		return false
+	}
+	if !isPatternRule(rule) {
+		return rule == name
+	}
+	d.ruleCacheMu.RLock()
+	re := d.ruleCache[rule]
+	d.ruleCacheMu.RUnlock()
+	if re == nil {
+		compiled, err := compileDomainRule(rule)
+		if err != nil || compiled == nil {
+			return false
+		}
+		d.ruleCacheMu.Lock()
+		if len(d.ruleCache) < maxRuleCache {
+			d.ruleCache[rule] = compiled
+		}
+		d.ruleCacheMu.Unlock()
+		re = compiled
+	}
+	return re.MatchString(name)
 }
 
 func validateDomainRule(rule string) error {
@@ -2743,14 +2885,17 @@ func validateDomainRule(rule string) error {
 	if rule == "" {
 		return fmt.Errorf("domain required")
 	}
+	if len(rule) > maxDomainRuleLen {
+		return fmt.Errorf("domain rule must be at most %d bytes", maxDomainRuleLen)
+	}
 	if isRegexRule(rule) {
-		if _, err := regexp.Compile(regexRulePattern(rule)); err != nil {
+		if _, err := compileDomainRule(rule); err != nil {
 			return fmt.Errorf("invalid regex: %w", err)
 		}
 		return nil
 	}
 	if strings.Contains(rule, "*") {
-		if _, err := regexp.Compile(wildcardRulePattern(rule)); err != nil {
+		if _, err := compileDomainRule(rule); err != nil {
 			return fmt.Errorf("invalid wildcard: %w", err)
 		}
 	}
@@ -2876,6 +3021,8 @@ func (d *DNSLeaf) loadOneBlocklist(i int, forceRemote bool, gravityExact *[]stri
 	src := &d.cfg.Blocklists[i]
 	source := strings.TrimSpace(src.Source)
 	label := src.Name
+	src.LastChecked = time.Now().Format(time.RFC3339)
+	src.CacheAge = 0
 	if label == "" {
 		label = source
 	}
@@ -2946,8 +3093,13 @@ func (d *DNSLeaf) loadOneBlocklist(i int, forceRemote bool, gravityExact *[]stri
 	}
 	src.LastLoaded = loaded
 	src.LastRefreshed = time.Now().Format(time.RFC3339)
-	if fromCache && src.LastError == "" {
-		src.LastError = "loaded from gravity cache"
+	if fromCache {
+		if info, statErr := os.Stat(d.gravityCachePath(source)); statErr == nil {
+			src.CacheAge = int64(time.Since(info.ModTime()).Seconds())
+			if src.CacheAge < 0 {
+				src.CacheAge = 0
+			}
+		}
 	}
 	if len(listExact) > 0 {
 		sort.Strings(listExact)
@@ -2979,7 +3131,7 @@ func (d *DNSLeaf) applyListAllowlist(domains []string, allow []string) []string 
 	for _, domain := range domains {
 		keep := true
 		for _, allowed := range allow {
-			if domainRuleMatches(allowed, domain) {
+			if d.domainRuleMatches(allowed, domain) {
 				keep = false
 				break
 			}
@@ -3144,12 +3296,12 @@ func (d *DNSLeaf) blockDecision(qname, clientIP string) (bool, string) {
 	}
 	if hasProfile {
 		for _, allow := range profile.Allowed {
-			if domainRuleMatches(allow, name) {
+			if d.domainRuleMatches(allow, name) {
 				return false, ""
 			}
 		}
 		for _, blocked := range profile.Blocked {
-			if domainRuleMatches(blocked, name) {
+			if d.domainRuleMatches(blocked, name) {
 				return true, "profile:" + profileName
 			}
 		}
@@ -3160,7 +3312,7 @@ func (d *DNSLeaf) blockDecision(qname, clientIP string) (bool, string) {
 		}
 	}
 	for _, allow := range d.cfg.Allowed {
-		if domainRuleMatches(allow, name) {
+		if d.domainRuleMatches(allow, name) {
 			return false, ""
 		}
 	}
@@ -3200,7 +3352,7 @@ func (d *DNSLeaf) blockDecision(qname, clientIP string) (bool, string) {
 		}
 	}
 	for _, rule := range d.blockedPat {
-		if domainRuleMatches(rule, name) {
+		if d.domainRuleMatches(rule, name) {
 			src := d.blockedSrc[rule]
 			if profileLimitsBlocklists && d.sourceIsBlocklistLocked(src) && !d.profileHasBlocklistLocked(profile, src) {
 				continue
@@ -3312,7 +3464,7 @@ func (d *DNSLeaf) profileHasBlocklistLocked(profile ClientProfile, source string
 func (d *DNSLeaf) scheduledDecisionLocked(name string) (string, string) {
 	now := time.Now()
 	for _, rule := range d.cfg.ScheduledRules {
-		if !rule.Enabled || !domainRuleMatches(rule.Domain, name) || !scheduledRuleActive(rule, now) {
+		if !rule.Enabled || !d.domainRuleMatches(rule.Domain, name) || !scheduledRuleActive(rule, now) {
 			continue
 		}
 		action := strings.ToLower(strings.TrimSpace(rule.Action))
@@ -3406,13 +3558,10 @@ func (d *DNSLeaf) resolveLocal(qname string, qtype uint16) []dns.RR {
 			value = strings.TrimSpace(rec.IP)
 		}
 		if qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
-			matched := recType == "A" || recType == "AAAA" || recType == "HTTPS" || recType == "SVCB"
-			if matched {
-				results = append(results, &dns.SVCB{
-					Hdr:      dns.RR_Header{Name: qname, Rrtype: qtype, Class: dns.ClassINET, Ttl: 300},
-					Priority: 1,
-					Target:   ".",
-				})
+			if (qtype == dns.TypeHTTPS && recType == "HTTPS") || (qtype == dns.TypeSVCB && recType == "SVCB") {
+				if rr, err := dns.NewRR(fmt.Sprintf("%s 300 IN %s %s", dns.Fqdn(qname), recType, value)); err == nil {
+					results = append(results, rr)
+				}
 			}
 			continue
 		}
@@ -3825,27 +3974,135 @@ func decrementMessageTTL(msg *dns.Msg, elapsed uint32) {
 	}
 }
 
+func stripClientSubnet(msg *dns.Msg) *dns.Msg {
+	if msg == nil || msg.IsEdns0() == nil {
+		return msg
+	}
+	copyMsg := msg.Copy()
+	opt := copyMsg.IsEdns0()
+	options := make([]dns.EDNS0, 0, len(opt.Option))
+	for _, option := range opt.Option {
+		if _, ok := option.(*dns.EDNS0_SUBNET); !ok {
+			options = append(options, option)
+		}
+	}
+	opt.Option = options
+	return copyMsg
+}
+
+func validUpstreamResponse(query, response *dns.Msg) bool {
+	if query == nil || response == nil || response.Id != query.Id || len(query.Question) != 1 || len(response.Question) != 1 {
+		return false
+	}
+	want := query.Question[0]
+	got := response.Question[0]
+	return strings.EqualFold(want.Name, got.Name) && want.Qtype == got.Qtype && want.Qclass == got.Qclass
+}
+
+func exchangeUpstreamEndpoint(endpoint UpstreamEndpoint, query *dns.Msg) (*dns.Msg, error) {
+	route, err := parseUpstreamEndpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	switch route.scheme {
+	case "udp", "tcp", "tls":
+		client := &dns.Client{Net: route.scheme, Timeout: 3 * time.Second}
+		if route.scheme == "tls" {
+			client.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: route.serverName}
+		}
+		response, _, err := client.Exchange(query, route.address)
+		return response, err
+	case "https":
+		wire, err := query.Pack()
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequest(http.MethodPost, route.url, bytes.NewReader(wire))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/dns-message")
+		req.Header.Set("Content-Type", "application/dns-message")
+		transport := proxyTransport.Clone()
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: route.serverName}
+		client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+		response, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("upstream HTTP status %d", response.StatusCode)
+		}
+		if contentType := response.Header.Get("Content-Type"); contentType != "" {
+			parsed, _, parseErr := mime.ParseMediaType(contentType)
+			if parseErr != nil || parsed != "application/dns-message" {
+				return nil, fmt.Errorf("upstream content type %q", contentType)
+			}
+		}
+		data, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > 64*1024 {
+			return nil, fmt.Errorf("upstream DNS message exceeds 64 KiB")
+		}
+		msg := new(dns.Msg)
+		if err := msg.Unpack(data); err != nil {
+			return nil, err
+		}
+		return msg, nil
+	default:
+		return nil, fmt.Errorf("unsupported upstream scheme %q", route.scheme)
+	}
+}
+
 func (d *DNSLeaf) forward(r *dns.Msg) *dns.Msg {
 	udpClient := &dns.Client{Net: "udp", Timeout: 3 * time.Second}
 	tcpClient := &dns.Client{Net: "tcp", Timeout: 3 * time.Second}
+	query := r
+	if d.cfg.StripECS {
+		query = stripClientSubnet(r)
+	}
 	configured := d.upstreamsForQuery(r)
-	addrs := make([]string, 0, len(configured))
+	type target struct {
+		address  string
+		endpoint *UpstreamEndpoint
+	}
+	targets := make([]target, 0, len(configured)+len(d.cfg.UpstreamEndpoints))
 	for _, addr := range configured {
 		if !d.disabledUpstream(addr) {
-			addrs = append(addrs, addr)
+			targets = append(targets, target{address: addr})
 		}
 	}
-	mathrand.Shuffle(len(addrs), func(i, j int) { addrs[i], addrs[j] = addrs[j], addrs[i] })
-	for _, addr := range addrs {
-		resp, _, err := udpClient.Exchange(r, addr)
-		if err != nil {
-			continue
+	for _, configuredEndpoint := range d.cfg.UpstreamEndpoints {
+		endpoint := configuredEndpoint
+		if !d.disabledUpstream(endpoint.URL) {
+			targets = append(targets, target{endpoint: &endpoint})
 		}
-		if resp.Truncated {
-			resp, _, err = tcpClient.Exchange(r, addr)
-			if err != nil {
-				continue
+	}
+	mathrand.Shuffle(len(targets), func(i, j int) { targets[i], targets[j] = targets[j], targets[i] })
+	for _, item := range targets {
+		var resp *dns.Msg
+		var err error
+		if item.endpoint != nil {
+			resp, err = exchangeUpstreamEndpoint(*item.endpoint, query)
+			if err == nil {
+				route, routeErr := parseUpstreamEndpoint(*item.endpoint)
+				if routeErr == nil && route.scheme == "udp" && resp != nil && resp.Truncated {
+					fallback := *item.endpoint
+					fallback.URL = "tcp://" + route.address
+					resp, err = exchangeUpstreamEndpoint(fallback, query)
+				}
 			}
+		} else {
+			resp, _, err = udpClient.Exchange(query, item.address)
+			if err == nil && resp != nil && resp.Truncated {
+				resp, _, err = tcpClient.Exchange(query, item.address)
+			}
+		}
+		if err != nil || !validUpstreamResponse(query, resp) {
+			continue
 		}
 		return resp
 	}
@@ -4627,10 +4884,15 @@ func (d *DNSLeaf) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *DNSLeaf) activeUpstreams() []string {
-	addrs := make([]string, 0, len(d.cfg.Upstreams))
+	addrs := make([]string, 0, len(d.cfg.Upstreams)+len(d.cfg.UpstreamEndpoints))
 	for _, addr := range d.cfg.Upstreams {
 		if !d.disabledUpstream(addr) {
 			addrs = append(addrs, addr)
+		}
+	}
+	for _, endpoint := range d.cfg.UpstreamEndpoints {
+		if !d.disabledUpstream(endpoint.URL) {
+			addrs = append(addrs, endpoint.URL)
 		}
 	}
 	return addrs

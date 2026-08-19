@@ -113,6 +113,64 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestValidateSecureUpstreamEndpoints(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Upstreams = nil
+	cfg.UpstreamEndpoints = []UpstreamEndpoint{{URL: "tls://cloudflare-dns.com:853"}, {URL: "https://dns.google/dns-query"}}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("secure upstream config rejected: %v", err)
+	}
+	if _, err := parseUpstreamEndpoint(UpstreamEndpoint{URL: "tls://1.1.1.1:853"}); err == nil {
+		t.Fatal("TLS endpoint without server name was accepted for an IP address")
+	}
+	if _, err := parseUpstreamEndpoint(UpstreamEndpoint{URL: "http://resolver.example/dns-query"}); err == nil {
+		t.Fatal("unencrypted HTTP DNS endpoint was accepted")
+	}
+}
+
+func TestStripClientSubnet(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("example.com.", dns.TypeA)
+	query.SetEdns0(1232, true)
+	query.IsEdns0().Option = []dns.EDNS0{&dns.EDNS0_SUBNET{Code: dns.EDNS0SUBNET, Family: 1, SourceNetmask: 24, Address: netIPv4(192, 0, 2, 1)}}
+	stripped := stripClientSubnet(query)
+	if stripped == query || stripped.IsEdns0() == nil || len(stripped.IsEdns0().Option) != 0 {
+		t.Fatal("client subnet was not removed from the forwarded copy")
+	}
+	if len(query.IsEdns0().Option) != 1 {
+		t.Fatal("original query was modified while stripping client subnet")
+	}
+}
+
+func TestValidUpstreamResponse(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("example.com.", dns.TypeA)
+	response := new(dns.Msg)
+	response.SetReply(query)
+	if !validUpstreamResponse(query, response) {
+		t.Fatal("matching upstream response was rejected")
+	}
+	response.Question[0].Name = "other.example."
+	if validUpstreamResponse(query, response) {
+		t.Fatal("upstream response with a different question was accepted")
+	}
+}
+
+func TestDomainRuleMatchingUsesBoundedCompiledRules(t *testing.T) {
+	d := newTestLeaf(t)
+	for i := 0; i < maxRuleCache+128; i++ {
+		if !d.domainRuleMatches("*.example-"+strconv.Itoa(i)+".com", "www.example-"+strconv.Itoa(i)+".com") {
+			t.Fatalf("wildcard rule %d did not match", i)
+		}
+	}
+	d.ruleCacheMu.RLock()
+	cacheSize := len(d.ruleCache)
+	d.ruleCacheMu.RUnlock()
+	if cacheSize > maxRuleCache {
+		t.Fatalf("compiled rule cache = %d, max %d", cacheSize, maxRuleCache)
+	}
+}
+
 func TestMessageCacheTTLUsesMinimumAndNegativeTTL(t *testing.T) {
 	msg := new(dns.Msg)
 	msg.Answer = []dns.RR{
