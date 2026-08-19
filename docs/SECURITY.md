@@ -12,6 +12,6 @@ DNSLeaf is a network service. Its safe defaults assume a private LAN, not an Int
 - Enable the optional HTTP/SOCKS proxy listeners only when their bind addresses and client policy are deliberate; an intentionally enabled proxy can reach destinations on behalf of allowed clients.
 - Do not expose unauthenticated `/api/ping`, DoH, or DNS listeners to networks that are not part of the deployment policy.
 
-The web service applies request header, body, and server timeout limits. DNS forwarding uses bounded UDP/TCP exchange timeouts, retries truncated UDP responses over TCP, and returns a server-failure response when all configured upstreams fail.
+The web service applies request header, body, and server timeout limits plus `nosniff`, frame-denial, referrer, permissions, CSP, and HTTPS HSTS response headers. DNS forwarding uses bounded UDP/TCP exchange timeouts, retries truncated UDP responses over TCP, and returns a server-failure response when all configured upstreams fail.
 
 DNS blocking is policy enforcement, not a guarantee that applications cannot use another resolver, encrypted tunnel, cached answer, or a direct IP address. Block browser DoH canaries and enforce outbound DNS policy at the network boundary when bypass resistance matters.

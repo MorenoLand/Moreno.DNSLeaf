@@ -33,6 +33,12 @@ go build -mod=vendor -o dnsleaf .
 ./dnsleaf --config config.json --no-tui
 ```
 
+Validate a configuration without starting listeners:
+
+```text
+dnsleaf --config config.json validate
+```
+
 The first start creates an administrator and prints a generated password. Save it immediately. The default panel binds to `127.0.0.1:8080`; DNS binds to port 53 and is restricted to private clients by default.
 
 ## Configuration and operations
@@ -43,6 +49,8 @@ Runtime configuration is intentionally not tracked. Start from [`config.example.
 - [Operations](docs/OPERATIONS.md)
 - [Security model](docs/SECURITY.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [HTTP API](docs/API.md)
+- [Releasing](docs/RELEASING.md)
 
 Runtime files include `config.json`, `stats.json`, the `gravity/` blocklist cache, and generated certificates under `certs/`. These files can contain credentials, local network information, query history, or private keys and are ignored by Git.
 

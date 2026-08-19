@@ -18,8 +18,11 @@ Relative paths are resolved from the configuration file directory, so the config
 
 - `--config path` selects the configuration file. A positional path is also accepted.
 - `--no-tui` runs without the terminal console and is intended for services and containers.
+- `validate` checks the selected configuration and schema without starting listeners.
 - `user list|add|reset|role|remove` manages web users without starting listeners.
 - `service install|uninstall` manages the Linux systemd unit using the selected executable and configuration paths.
+
+`schema_version` is written by DNSLeaf and is currently `1`. Configurations from schema `0` are upgraded in memory; a newer schema is rejected rather than silently rewritten.
 
 ## Listeners and forwarding
 
@@ -42,7 +45,7 @@ Relative paths are resolved from the configuration file directory, so the config
 
 ## Cache and runtime state
 
-`cache_enabled`, `cache_size`, and `cache_ttl_seconds` control response caching. The configured TTL is the fallback for responses without a useful answer TTL; cached responses are returned with TTLs reduced by their age.
+`cache_enabled`, `cache_size`, and `cache_ttl_seconds` control response caching. The configured TTL caps authoritative positive or negative TTLs; responses without a useful TTL are not cached. Cached responses are returned with TTLs reduced by their age.
 
 DNSLeaf writes `stats.json` and the `gravity/` cache beside the configuration file. Configuration and state updates use temporary files and replacement writes, and state files are created with private permissions where the platform supports them. Back up `config.json`, `stats.json`, blocklists, and certificate material separately.
 

@@ -25,6 +25,15 @@ If DoH is enabled, send `application/dns-message` requests to `/dns-query`. The 
 curl http://127.0.0.1:8080/api/ping
 ```
 
+For service monitoring, use the unauthenticated liveness and readiness endpoints:
+
+```bash
+curl http://127.0.0.1:8080/api/healthz
+curl -i http://127.0.0.1:8080/api/readyz
+```
+
+`healthz` reports that the process is alive. `readyz` returns `503` until the DNS and HTTP listeners are registered and an active upstream is available, unless forwarding is disabled.
+
 ## Blocklists and policy changes
 
 Use the panel's Gravity action or the console's `gravity` command to refresh blocklists. Local sources are resolved relative to the configuration file. Remote sources use an HTTPS-capable client with a bounded request timeout and retain a cached copy if refresh fails.
@@ -43,6 +52,12 @@ go test -mod=vendor ./...
 go test -race -mod=vendor ./...
 go test -mod=mod ./...
 go vet -mod=vendor ./...
+```
+
+Validate a configuration without opening listeners:
+
+```bash
+./dnsleaf --config config.json validate
 ```
 
 The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both vendor and module test runs before publishing a release.

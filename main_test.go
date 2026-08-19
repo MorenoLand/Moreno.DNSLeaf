@@ -248,6 +248,35 @@ func TestDoHServesLocalRecord(t *testing.T) {
 	}
 }
 
+func TestHealthAndReadinessEndpoints(t *testing.T) {
+	d := newTestLeaf(t)
+	res := httptest.NewRecorder()
+	d.handleHealthz(res, httptest.NewRequest(http.MethodGet, "/api/healthz", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", res.Code, http.StatusOK)
+	}
+	res = httptest.NewRecorder()
+	d.handleReadyz(res, httptest.NewRequest(http.MethodGet, "/api/readyz", nil))
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d before start", res.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestConfigSchemaMigration(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.SchemaVersion = 0
+	if err := migrateConfig(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SchemaVersion != currentConfigSchema {
+		t.Fatalf("migrated schema = %d, want %d", cfg.SchemaVersion, currentConfigSchema)
+	}
+	cfg.SchemaVersion = currentConfigSchema + 1
+	if err := migrateConfig(&cfg); err == nil {
+		t.Fatal("future schema was accepted")
+	}
+}
+
 func TestRuntimeStateMapsAreBounded(t *testing.T) {
 	d := newTestLeaf(t)
 	for i := 0; i < maxTrackedClients+1; i++ {

@@ -189,6 +189,7 @@ type Stats struct {
 }
 
 type Config struct {
+	SchemaVersion      int                      `json:"schema_version"`
 	Listen             string                   `json:"listen"`
 	HTTP               string                   `json:"http"`
 	HTTPS              string                   `json:"https"`
@@ -349,6 +350,7 @@ type Session struct {
 
 const consoleSidebarWidth = 34
 const consoleInputHeight = 3
+const currentConfigSchema = 1
 
 type consoleUI struct {
 	app       *tview.Application
@@ -1487,6 +1489,7 @@ setInterval(function(){if(cur==='dashboard')loadSt();},3000);
 
 func defaultConfig() Config {
 	return Config{
+		SchemaVersion:      currentConfigSchema,
 		Listen:             ":53",
 		HTTP:               "127.0.0.1:8080",
 		HTTPS:              "",
@@ -1645,6 +1648,9 @@ const (
 func validateConfig(cfg Config) error {
 	var issues []string
 	add := func(field, message string) { issues = append(issues, field+" "+message) }
+	if cfg.SchemaVersion != currentConfigSchema {
+		add("schema_version", fmt.Sprintf("must be %d", currentConfigSchema))
+	}
 	if err := validateNetworkAddress(cfg.Listen, true); err != nil {
 		add("listen", err.Error())
 	}
@@ -1782,6 +1788,16 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
+func migrateConfig(cfg *Config) error {
+	if cfg.SchemaVersion > currentConfigSchema {
+		return fmt.Errorf("configuration schema %d is newer than supported schema %d", cfg.SchemaVersion, currentConfigSchema)
+	}
+	if cfg.SchemaVersion == 0 {
+		cfg.SchemaVersion = currentConfigSchema
+	}
+	return nil
+}
+
 func validateNetworkAddress(value string, allowEmptyHost bool) error {
 	value = strings.TrimSpace(value)
 	host, port, err := net.SplitHostPort(value)
@@ -1865,6 +1881,11 @@ func loadConfig(path string) (Config, error) {
 		return cfg, err
 	}
 	err = json.Unmarshal(data, &cfg)
+	if err == nil {
+		if migrationErr := migrateConfig(&cfg); migrationErr != nil {
+			return cfg, migrationErr
+		}
+	}
 	if cfg.ClientNames == nil {
 		cfg.ClientNames = map[string]string{}
 	}
@@ -2352,7 +2373,7 @@ func (d *DNSLeaf) sessionFromRequest(r *http.Request) (Session, bool) {
 
 func (d *DNSLeaf) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" || r.URL.Path == "/dnsleaf.png" || r.URL.Path == "/dns-query" || r.URL.Path == "/api/ping" || r.URL.Path == "/api/login" || r.URL.Path == "/api/session" {
+		if r.URL.Path == "/" || r.URL.Path == "/dnsleaf.png" || r.URL.Path == "/dns-query" || r.URL.Path == "/api/ping" || r.URL.Path == "/api/healthz" || r.URL.Path == "/api/readyz" || r.URL.Path == "/api/login" || r.URL.Path == "/api/session" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -4471,13 +4492,51 @@ func (d *DNSLeaf) handleDoH(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
 func (d *DNSLeaf) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"app": "dnsleaf", "ok": true, "uptime": time.Since(d.started).Truncate(time.Second).String()})
+}
+
+func (d *DNSLeaf) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if d.isStopping() {
+		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]interface{}{"app": "dnsleaf", "ok": false, "status": "stopping"})
+		return
+	}
+	writeJSON(w, map[string]interface{}{"app": "dnsleaf", "ok": true, "status": "alive", "uptime": time.Since(d.started).Truncate(time.Second).String()})
+}
+
+func (d *DNSLeaf) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	d.serversMu.Lock()
+	dnsListeners := len(d.dnsServers)
+	httpListeners := len(d.httpServers)
+	d.serversMu.Unlock()
+	d.cfgMu.RLock()
+	resolverDisabled := d.cfg.ResolverDisabled
+	activeUpstreams := len(d.activeUpstreams())
+	d.cfgMu.RUnlock()
+	ready := !d.isStopping() && dnsListeners >= 2 && httpListeners >= 1 && (resolverDisabled || activeUpstreams > 0)
+	status := http.StatusOK
+	if !ready {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSONStatus(w, status, map[string]interface{}{"app": "dnsleaf", "ready": ready, "dns_listeners": dnsListeners, "http_listeners": httpListeners, "active_upstreams": activeUpstreams})
 }
 
 func (d *DNSLeaf) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -6607,6 +6666,18 @@ func (d *DNSLeaf) handleCLI(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
+	if args[0] == "validate" || args[0] == "check-config" {
+		d.cfgMu.RLock()
+		err := validateConfig(d.cfg)
+		schema := d.cfg.SchemaVersion
+		d.cfgMu.RUnlock()
+		if err != nil {
+			fmt.Printf("configuration invalid: %v\n", err)
+		} else {
+			fmt.Printf("configuration valid (schema %d)\n", schema)
+		}
+		return true
+	}
 	if args[0] == "service" {
 		return d.handleServiceCLI(args[1:])
 	}
@@ -8124,6 +8195,8 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	mux.HandleFunc("/dnsleaf.png", d.handleLogo)
 	mux.HandleFunc("/dns-query", d.handleDoH)
 	mux.HandleFunc("/api/ping", d.handlePing)
+	mux.HandleFunc("/api/healthz", d.handleHealthz)
+	mux.HandleFunc("/api/readyz", d.handleReadyz)
 	mux.HandleFunc("/api/session", d.handleSession)
 	mux.HandleFunc("/api/login", d.handleLogin)
 	mux.HandleFunc("/api/status", d.handleStatus)
