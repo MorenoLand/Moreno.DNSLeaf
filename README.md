@@ -19,7 +19,7 @@ DNSLeaf is intentionally extensible beyond a basic DNS sinkhole. It is still an 
 
 ## Quick start
 
-Requirements: Go 1.25.3 or newer for development. CI also verifies the current Go 1.26.x toolchain. A release binary can run without Go installed.
+Requirements: Go 1.25.3 or newer for development. A built binary can run without Go installed.
 
 ```powershell
 Copy-Item config.example.json config.json
@@ -41,12 +41,6 @@ Validate a configuration without starting listeners:
 dnsleaf --config config.json validate
 ```
 
-Print build metadata without loading a configuration:
-
-```text
-dnsleaf --version
-```
-
 The first start creates an administrator and prints a generated password. Save it immediately. The default panel binds to `127.0.0.1:8080`; DNS binds to port 53 and is restricted to private clients by default.
 
 ## Configuration and operations
@@ -58,7 +52,7 @@ Runtime configuration is intentionally not tracked. Start from [`config.example.
 - [Security model](docs/SECURITY.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [HTTP API](docs/API.md)
-- [Releasing](docs/RELEASING.md)
+- [Building](docs/BUILDING.md)
 
 Runtime files include `config.json`, `stats.json`, the `gravity/` blocklist cache, and generated certificates under `certs/`. These files can contain credentials, local network information, query history, or private keys and are ignored by Git.
 
@@ -95,7 +89,15 @@ go vet -mod=vendor ./...
 go mod verify
 ```
 
-For a local release build with embedded version metadata, use `scripts/build.ps1` on Windows or `scripts/build.sh` on Unix-like systems. These scripts write binaries under the ignored `dist/` directory and do not publish artifacts.
+Build directly with the Go toolchain when needed:
+
+```powershell
+go build -mod=vendor -trimpath -o dnsleaf.exe .
+```
+
+```bash
+go build -mod=vendor -trimpath -o dnsleaf .
+```
 
 The repository has no parent-directory module dependencies. `vendor/` is generated from `go.mod`; verify both vendor-mode and module-mode builds when changing dependencies.
 

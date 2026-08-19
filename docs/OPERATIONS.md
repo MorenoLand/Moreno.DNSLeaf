@@ -62,7 +62,7 @@ Validate a configuration without opening listeners:
 ./dnsleaf --config config.json validate
 ```
 
-The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both vendor and module test runs before publishing a release.
+The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both vendor and module test runs before submitting source changes.
 
 ## Linux service
 

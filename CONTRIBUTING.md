@@ -11,8 +11,8 @@ go vet -mod=vendor ./...
 go mod verify
 ```
 
-Run the same checks on Windows with PowerShell as well as on Unix-like systems when changing listeners, persistence, filesystem paths, or service behavior. Release binaries are built deliberately with `scripts/build.ps1` or `scripts/build.sh`; the repository workflow never publishes artifacts automatically.
+Run the same checks on Windows with PowerShell as well as on Unix-like systems when changing listeners, persistence, filesystem paths, or service behavior. Build artifacts are local outputs; do not commit binaries, runtime state, credentials, generated certificates, or local blocklists.
 
 Changes that affect configuration, persistence, policy precedence, DNS forwarding, or authentication should include regression coverage and update the relevant file under `docs/`. Do not commit runtime state, credentials, generated certificates, binaries, or local blocklists.
 
-The repository workflow is manual-only. Maintainers decide when checks and release builds run.
+There is no project CI or automated build workflow. Contributors are responsible for validating their own changes before submitting them.

@@ -9009,12 +9009,15 @@ func (d *DNSLeaf) Start(useTUI bool) error {
 	return runErr
 }
 
+func printUsage() {
+	fmt.Println("DNSLeaf - self-hosted DNS resolver and network policy manager")
+	fmt.Println("usage: dnsleaf [--config path] [--no-tui] [command]")
+	fmt.Println("commands: validate, user, service")
+}
+
 func main() {
 	for _, arg := range os.Args[1:] {
 		switch arg {
-		case "--version", "-version", "version":
-			printVersion()
-			return
 		case "--help", "-h", "help":
 			printUsage()
 			return
