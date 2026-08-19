@@ -1,0 +1,1108 @@
+<html><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="darkreader-lock">
+<title>DNSLeaf</title>
+<link rel="icon" type="image/png" href="/dnsleaf.png">
+<style>
+:root{color-scheme:dark;--bg:#1f272d;--bg2:#161d22;--side:#20282e;--top:#2b343b;--panel:#2b343b;--panel2:#242c32;--field:#20282e;--line:#3b474f;--line2:#4c5b64;--text:#edf3f6;--muted:#b1c0c8;--dim:#83939c;--blue:#3c8dbc;--blue2:#367fa9;--cyan:#00c0ef;--green:#00a65a;--red:#dd4b39;--yellow:#f39c12;--purple:#605ca8;--radius:4px}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{min-height:100%;background:var(--bg);forced-color-adjust:none}
+body{font-family:"Segoe UI",Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.42}
+button,input,select{font:inherit}
+.auth{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:24px;background:#151a1d;background-image:radial-gradient(circle at 20% 10%,rgba(0,192,239,.12),transparent 28%),radial-gradient(circle at 80% 90%,rgba(0,166,90,.12),transparent 24%)}
+.auth.hide{display:none}
+.login{width:min(390px,100%);background:#2b343b;border-radius:6px;box-shadow:0 18px 55px rgba(0,0,0,.45);padding:26px 28px;border:1px solid rgba(255,255,255,.04);text-align:center}
+.login .logo{margin:0 auto 12px}
+.login h2{font-size:20px;font-weight:400;margin-bottom:14px}
+.login .muted{text-align:left;margin:8px 0 6px}
+.login input{width:100%;margin-top:10px}
+.login button{width:100%;margin-top:12px}
+.login-options{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;text-align:left}
+.login-options label{display:flex;align-items:center;gap:7px;color:#c9d3d9;font-size:12px}
+.login-options input{width:auto;margin:0;min-height:auto}
+.login-links{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px}
+.login-links span{background:#38434b;color:#c9d3d9;border-radius:var(--radius);padding:8px 4px;font-size:12px}
+.err{color:#ff9b8e;font-size:13px;min-height:20px;margin-top:10px;text-align:left}
+header{position:fixed;left:0;top:0;bottom:0;width:230px;background:var(--side);border-right:1px solid #151b1f;z-index:10;display:flex;flex-direction:column}
+.brand{min-height:112px;background:#1b2227;border-bottom:1px solid #151b1f;display:flex;align-items:flex-start;gap:12px;padding:16px 18px}
+.logo{width:42px;height:42px;display:block;flex:0 0 auto;object-fit:contain}
+.brand h1{font-size:20px;font-weight:600;letter-spacing:.2px;line-height:1}
+.service-status{font-size:12px;color:#c7d3da;margin-top:5px;display:block;line-height:1.5}
+.service-line{display:flex;gap:6px;align-items:center}
+.service-metrics{margin-top:5px;color:#b9c6cc;font-size:12px}
+.service-metrics div{display:flex;justify-content:space-between;gap:12px;min-width:118px}
+.service-metrics b{font-weight:600;color:#eef5f7}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 2px rgba(0,166,90,.2)}
+nav{padding:10px 0;display:flex;flex-direction:column}
+nav a,#logout{display:flex;align-items:center;gap:10px;color:#c8d3da;text-decoration:none;cursor:pointer;padding:11px 18px;border-left:4px solid transparent;font-size:14px}
+nav a:hover,#logout:hover{background:#1b2227;color:#fff}
+nav a.on{background:#1b2227;color:#fff;border-left-color:var(--blue)}
+.nav-label{padding:15px 18px 7px 22px;color:#7d8a92;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.nav-label:first-child{padding-top:8px}
+.ico{width:17px;height:17px;display:inline-block;position:relative;flex:0 0 17px;color:#b8c5cb;font-size:0}
+.ico:before,.ico:after{content:"";position:absolute;box-sizing:border-box}
+.ico.dash:before{left:2px;top:2px;width:5px;height:5px;background:currentColor;box-shadow:8px 0 0 currentColor,0 8px 0 currentColor,8px 8px 0 currentColor}
+.ico.log:before{left:4px;right:2px;top:4px;height:2px;background:currentColor;box-shadow:0 5px 0 currentColor,0 10px 0 currentColor}
+.ico.local:before{left:3px;top:7px;width:11px;height:8px;border:2px solid currentColor;border-top:0}.ico.local:after{left:3px;top:2px;width:11px;height:11px;border-left:2px solid currentColor;border-top:2px solid currentColor;transform:rotate(45deg)}
+.ico.block:before{inset:2px;border:2px solid currentColor;border-radius:50%}.ico.block:after{left:4px;right:4px;top:7px;height:2px;background:currentColor;transform:rotate(-35deg)}
+.ico.up:before{left:2px;right:2px;top:4px;height:2px;background:currentColor;box-shadow:0 8px 0 currentColor}.ico.up:after{right:2px;top:1px;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;box-shadow:-10px 8px 0 -1px currentColor}
+.ico.client:before{left:5px;top:2px;width:7px;height:7px;border-radius:50%;background:currentColor}.ico.client:after{left:2px;right:2px;bottom:2px;height:7px;border-radius:8px 8px 2px 2px;background:currentColor}
+.ico.settings:before{inset:3px;border:3px solid currentColor;border-radius:50%}.ico.settings:after{left:7px;top:0;width:3px;height:17px;background:currentColor;box-shadow:0 0 0 0 currentColor;transform:rotate(45deg)}
+.ico.cert:before{left:4px;top:2px;width:9px;height:13px;border:2px solid currentColor;border-radius:2px}.ico.cert:after{left:6px;top:10px;width:5px;height:2px;background:currentColor}
+.ico.users:before{left:2px;top:3px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:8px 0 0 currentColor}.ico.users:after{left:1px;right:1px;bottom:3px;height:5px;border-radius:6px;background:currentColor}
+nav .nav-label.main{order:1}nav .nav-label.dns{order:5}nav .nav-label.system{order:10}
+nav a[data-t="dashboard"]{order:2}nav a[data-t="log"]{order:3}nav a[data-t="clients"]{order:4}nav a[data-t="records"]{order:6}nav a[data-t="blocklist"]{order:7}nav a[data-t="profiles"]{order:8}nav a[data-t="upstreams"]{order:9}nav a[data-t="settings"]{order:11}nav a[data-t="certs"]{order:12}nav a[data-t="proxy"]{order:13}nav a[data-t="serverlog"]{order:14}nav a[data-t="users"]{order:15}
+nav a[data-t="dashboard"] .ico:before{left:2px;top:2px;width:5px;height:5px;background:currentColor;box-shadow:8px 0 0 currentColor,0 8px 0 currentColor,8px 8px 0 currentColor}
+nav a[data-t="log"] .ico:before,nav a[data-t="serverlog"] .ico:before{left:4px;right:2px;top:4px;height:2px;background:currentColor;box-shadow:0 5px 0 currentColor,0 10px 0 currentColor}
+nav a[data-t="records"] .ico:before{left:3px;top:7px;width:11px;height:8px;border:2px solid currentColor;border-top:0}nav a[data-t="records"] .ico:after{left:3px;top:2px;width:11px;height:11px;border-left:2px solid currentColor;border-top:2px solid currentColor;transform:rotate(45deg)}
+nav a[data-t="blocklist"] .ico:before{inset:2px;border:2px solid currentColor;border-radius:50%}nav a[data-t="blocklist"] .ico:after{left:4px;right:4px;top:7px;height:2px;background:currentColor;transform:rotate(-35deg)}
+nav a[data-t="profiles"] .ico:before{left:2px;top:2px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:8px 0 0 currentColor,4px 8px 0 currentColor}nav a[data-t="profiles"] .ico:after{left:1px;right:1px;bottom:1px;height:5px;border-radius:6px 6px 2px 2px;border:2px solid currentColor;border-top:0}
+nav a[data-t="upstreams"] .ico:before{left:2px;right:2px;top:4px;height:2px;background:currentColor;box-shadow:0 8px 0 currentColor}nav a[data-t="upstreams"] .ico:after{right:2px;top:1px;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;box-shadow:-10px 8px 0 -1px currentColor}
+nav a[data-t="clients"] .ico:before{left:5px;top:2px;width:7px;height:7px;border-radius:50%;background:currentColor}nav a[data-t="clients"] .ico:after{left:2px;right:2px;bottom:2px;height:7px;border-radius:8px 8px 2px 2px;background:currentColor}
+nav a[data-t="settings"] .ico:before{inset:3px;border:3px solid currentColor;border-radius:50%}nav a[data-t="settings"] .ico:after{left:7px;top:0;width:3px;height:17px;background:currentColor;transform:rotate(45deg)}
+nav a[data-t="certs"] .ico:before{left:4px;top:2px;width:9px;height:13px;border:2px solid currentColor;border-radius:2px}nav a[data-t="certs"] .ico:after{left:6px;top:10px;width:5px;height:2px;background:currentColor}
+nav a[data-t="proxy"] .ico:before{left:2px;top:6px;width:12px;height:5px;border:2px solid currentColor;border-radius:6px}nav a[data-t="proxy"] .ico:after{left:7px;top:2px;width:2px;height:13px;background:currentColor;box-shadow:-5px 6px 0 currentColor,5px 6px 0 currentColor}
+nav a[data-t="users"] .ico:before{left:2px;top:3px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:8px 0 0 currentColor}nav a[data-t="users"] .ico:after{left:1px;right:1px;bottom:3px;height:5px;border-radius:6px;background:currentColor}
+.account{margin-top:auto;border-top:1px solid #151b1f;padding:14px 18px 18px;background:#1b2227}
+.account-label{font-size:11px;color:#8a989f;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px}
+.account-user{font-size:14px;font-weight:600}
+.account-role{display:none}
+#logout{margin-top:12px;border:1px solid #3b474f;border-radius:var(--radius);padding:8px 10px;justify-content:center}
+main{margin-left:230px;min-height:100vh;background:var(--bg);padding:0 22px 28px}
+.tp{display:none}.tp.on{display:block}
+.page-head{margin:0 -22px 18px;padding:16px 22px;background:#252e34;border-bottom:1px solid #141a1e;display:flex;gap:16px;align-items:center;justify-content:space-between}
+.page-title h2{font-size:24px;font-weight:400}
+.page-title p{color:#bac6cc;margin-top:2px}
+.toolbar,.fr{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.toolbar{justify-content:flex-end;flex:1}
+.toolbar input{max-width:600px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:16px}
+.sc{position:relative;overflow:hidden;border-radius:var(--radius);min-height:118px;padding:18px 18px;color:#fff;background:var(--blue);box-shadow:0 2px 0 rgba(0,0,0,.14)}
+.sc:nth-child(2){background:var(--red)}.sc:nth-child(3){background:var(--green)}.sc:nth-child(4){background:var(--yellow)}.sc:nth-child(5){background:var(--purple)}.sc:nth-child(6){background:#a53a2d}
+.sc .v{font-size:42px;font-weight:700;line-height:1;margin-top:12px;letter-spacing:.01em}
+.sc .l{font-size:17px;margin-top:0;opacity:.98}
+.wm{position:absolute;right:16px;bottom:12px;width:96px;height:96px;opacity:.2;pointer-events:none;background:center/contain no-repeat}
+.wm.globe{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23000' stroke-width='7' stroke-linecap='round'%3E%3Ccircle cx='50' cy='50' r='36'/%3E%3Cpath d='M14 50h72M50 14c13 13 13 59 0 72M50 14c-13 13-13 59 0 72'/%3E%3C/g%3E%3C/svg%3E")}
+.wm.hand{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23000' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M34 12h32l22 22v32L66 88H34L12 66V34z'/%3E%3Cpath d='M30 50h40'/%3E%3C/g%3E%3C/svg%3E")}
+.wm.house{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23000' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 48L50 20l33 28'/%3E%3Cpath d='M27 45v35h46V45'/%3E%3Cpath d='M42 80V58h16v22'/%3E%3C/g%3E%3C/svg%3E")}
+.wm.pie{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23000' d='M54 10a40 40 0 1 1-30 12l30 30z'/%3E%3Cpath fill='%23000' opacity='.65' d='M60 8v36h35A40 40 0 0 0 60 8z'/%3E%3C/svg%3E")}
+.wm.route{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23000' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 32h54'/%3E%3Cpath d='M58 18l16 14-16 14'/%3E%3Cpath d='M82 68H28'/%3E%3Cpath d='M42 54L26 68l16 14'/%3E%3C/g%3E%3C/svg%3E")}
+.wm.list{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23000'%3E%3Ccircle cx='25' cy='28' r='7'/%3E%3Ccircle cx='25' cy='50' r='7'/%3E%3Ccircle cx='25' cy='72' r='7'/%3E%3Crect x='40' y='22' width='42' height='12' rx='3'/%3E%3Crect x='40' y='44' width='42' height='12' rx='3'/%3E%3Crect x='40' y='66' width='42' height='12' rx='3'/%3E%3C/g%3E%3C/svg%3E")}
+.grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+.dash-top{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,.75fr);gap:16px;align-items:start}
+.dash-main{display:flex;flex-direction:column;gap:16px}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.ii,.panel{background:var(--panel);border:1px solid #1a2024;border-top:3px solid var(--blue);border-radius:var(--radius);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.ii{padding:13px 14px}
+.ii .k{font-size:12px;color:#b6c4cb;text-transform:uppercase;letter-spacing:.04em}
+.ii .kv{font-family:Consolas,"Courier New",monospace;margin-top:4px;color:#fff}
+.panel{margin-bottom:16px}
+.grid>.panel,.dash-main .panel,.dash-top .panel{margin-bottom:0}
+.panel h2{font-size:16px;font-weight:400;padding:11px 14px;border-bottom:1px solid var(--line)}
+.panel-body{padding:14px}
+table{width:100%;border-collapse:collapse;background:transparent}
+th,td{padding:10px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:12px;color:#d7e0e5;text-transform:uppercase;font-weight:600;background:#242c32}
+tr:hover td{background:#242c32}
+input,select,textarea{background:var(--field);border:1px solid var(--line2);color:#fff;padding:8px 10px;border-radius:var(--radius);min-height:36px}
+textarea{min-height:92px;resize:vertical;font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(0,192,239,.12)}
+input::placeholder,textarea::placeholder{color:#8c9aa2}
+button{background:var(--blue);border:1px solid var(--blue2);color:#fff;border-radius:var(--radius);padding:8px 13px;cursor:pointer;font-weight:600;min-height:36px}
+button:hover{background:var(--blue2)}
+.dg{background:var(--red);border-color:#c43e2d}.dg:hover{background:#c43e2d}
+.ok{background:var(--green);border-color:#008d4c}.ok:hover{background:#008d4c}
+.ghost{background:#3a464e;border-color:#59666f;color:#edf3f6}.ghost:hover{background:#46545d}
+.sm{padding:4px 9px;font-size:12px;min-height:26px}
+.tag{display:inline-block;padding:3px 8px;border-radius:2px;font-size:12px;font-weight:700;color:#fff;text-transform:uppercase}
+.tag-blocked,.tag-error,.tag-denied{background:var(--red)}.tag-local,.tag-on{background:var(--green)}.tag-cached{background:var(--yellow)}.tag-forwarded{background:var(--blue)}.tag-trolled{background:#9b59b6}.tag-override{background:#16a085}.tag-off{background:#6c7a83}
+.empty{color:#aebbc2;padding:24px;text-align:center}
+.actions{display:grid;grid-template-columns:repeat(4,32px);gap:5px;min-width:143px}
+.actions .sm{width:32px;height:30px;min-height:30px;padding:0;text-align:center}
+.qlog{table-layout:fixed}
+.qlog th:nth-child(1){width:74px}.qlog th:nth-child(2){width:130px}.qlog th:nth-child(3){width:82px}.qlog th:nth-child(6){width:70px}.qlog th:nth-child(7){width:95px}.qlog th:nth-child(8){width:54px}.qlog th:nth-child(9){width:156px}
+.qlog td code{white-space:normal;word-break:break-word}
+.qlog td{overflow:hidden}
+.nowrap{white-space:nowrap}
+.toast-wrap{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 36px))}
+.toast{background:#1b2227;border:1px solid #3b474f;border-left:4px solid var(--blue);box-shadow:0 12px 30px rgba(0,0,0,.35);border-radius:var(--radius);padding:10px 12px;color:#edf3f6;font-size:13px}
+.toast.ok{border-left-color:var(--green);background:#1d2c25}
+.toast.err{border-left-color:var(--red);background:#2e2222}
+.modal{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(10,14,17,.68);padding:24px}
+.modal.show{display:flex}
+.dialog{width:min(880px,calc(100vw - 48px));max-height:calc(100vh - 48px);background:#252e34;border:1px solid var(--line2);box-shadow:0 24px 70px rgba(0,0,0,.45);border-radius:var(--radius);display:flex;flex-direction:column}
+.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.dialog-body{padding:16px;overflow:auto}
+.console{background:#121719;border:1px solid var(--line);border-radius:var(--radius);min-height:320px;max-height:56vh;overflow:auto;white-space:pre-wrap;font-family:Consolas,"Courier New",monospace;line-height:1.45;color:#dff4e4;padding:12px}
+.chart,.spark{background:#232b31;border:1px solid var(--line);border-radius:var(--radius)}
+.chart{min-height:248px;padding:18px;display:grid;grid-template-columns:240px minmax(0,1fr);gap:22px;align-items:center}
+.mix-donut{width:190px;aspect-ratio:1;border-radius:50%;background:conic-gradient(var(--blue) 0 var(--fwd),var(--yellow) var(--fwd) var(--cache),var(--green) var(--cache) var(--local),var(--red) var(--local) 100%);position:relative;margin:auto;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.mix-donut:after{content:"";position:absolute;inset:45px;background:#232b31;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.mix-total{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:88px;text-align:center;z-index:1;font-family:Consolas,"Courier New",monospace;font-size:20px;color:#fff}
+.mix-total span{display:block;font-family:"Segoe UI",Arial,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#b8c7ce}
+.mix-legend{display:grid;gap:10px}
+.mix-row{display:grid;grid-template-columns:14px 110px minmax(0,1fr) 74px;gap:10px;align-items:center}
+.mix-dot{width:12px;height:12px;border-radius:2px}
+.mix-name{color:#dce7ec;font-weight:600}
+.mix-track{height:12px;background:#1b2227;border:1px solid #37424a;border-radius:2px;overflow:hidden}
+.mix-fill{height:100%;min-width:3px;box-shadow:inset 0 -5px 0 rgba(0,0,0,.12)}
+.mix-val{text-align:right;font-family:Consolas,"Courier New",monospace;color:#fff}
+.spark{height:406px;display:grid;grid-template-columns:78px minmax(0,1fr);grid-template-rows:24px minmax(0,1fr) 70px;overflow:hidden}
+.spark-ytitle{grid-column:1;grid-row:1;color:#c4d0d6;font-size:12px;text-align:right;padding:6px 10px 0 0;text-transform:uppercase;letter-spacing:.05em}
+.spark-xtitle{grid-column:2;grid-row:3;align-self:end;text-align:center;color:#c4d0d6;font-size:12px;text-transform:uppercase;letter-spacing:.05em;padding-bottom:6px}
+.spark-axis{grid-column:1;grid-row:2;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding:0 10px 0 0;color:#c4d0d6;font-family:Consolas,"Courier New",monospace;font-size:13px;border-right:1px solid rgba(255,255,255,.18)}
+.spark-plot{grid-column:2;grid-row:2;display:grid;gap:3px;align-items:end;padding:0 14px;background-image:linear-gradient(rgba(255,255,255,.16) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.10) 1px,transparent 1px);background-size:100% 20%,64px 100%;background-position:left bottom}
+.spark-xaxis{grid-column:2;grid-row:3;display:grid;align-items:start;padding:26px 14px 0 14px;border-top:1px solid rgba(255,255,255,.18);color:#c4d0d6;font-family:Consolas,"Courier New",monospace;font-size:12px}
+.spark-xaxis span{white-space:nowrap;transform:rotate(-32deg);transform-origin:left top}
+.spark-col{height:var(--h);min-height:0;display:flex;flex-direction:column-reverse;border-radius:2px 2px 0 0;overflow:hidden;position:relative;background:transparent}
+.spark-col.has{box-shadow:0 0 0 1px rgba(0,0,0,.12)}
+.spark-seg{width:100%;min-height:1px}
+.spark-seg.forwarded{background:var(--blue)}.spark-seg.blocked{background:var(--red)}.spark-seg.local{background:var(--green)}.spark-seg.cached{background:var(--yellow)}
+.formgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.setting-section{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
+.setting-section:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.setting-title{font-size:12px;color:#d9e4e9;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{color:#edf3f6;font-size:13px;font-weight:600}
+.field .hint{color:#aebbc2;font-size:12px;line-height:1.35}
+.field input{width:100%}
+.field textarea,.field select{width:100%}
+.tog{display:flex;align-items:center;gap:9px;color:#dce7ec;background:var(--field);border:1px solid var(--line2);border-radius:var(--radius);padding:9px 11px;min-height:42px}
+.tog input{width:auto;min-height:auto}
+.muted{color:#aebbc2;font-size:13px}
+code{font-family:Consolas,"Courier New",monospace;font-size:.94em;color:#fff}
+.userbar,.nav-section{display:none}
+@media(max-width:860px){header{position:static;width:auto}.brand{height:auto;padding:14px 18px}main{margin-left:0;padding:0 14px 20px}.page-head{margin:0 -14px 16px;display:block}.toolbar{margin-top:12px;justify-content:stretch}.toolbar input{max-width:none}.grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}}
+</style>
+</head><body>
+<div id="auth" class="auth">
+<div class="login">
+<img class="logo" src="/dnsleaf.png" alt="" aria-hidden="true">
+<h2>DNSLeaf</h2>
+<div class="muted">Sign in to manage DNS filtering, clients, blocklists, and resolver settings.</div>
+<input id="login-user" placeholder="Username" autocomplete="username">
+<input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+<div class="login-options"><label><input id="remember-user" type="checkbox"> Remember user</label></div>
+<button id="btn-login">Sign in</button>
+<div id="login-error" class="err"></div>
+<div class="login-links"><span>Documentation</span><span>Console UI</span><span>Offline Ready</span></div>
+</div>
+</div>
+<header>
+<div class="brand"><img class="logo" src="/dnsleaf.png" alt="" aria-hidden="true"><div><h1>DNSLeaf</h1><div class="service-status"><div class="service-line"><span class="status-dot"></span><span id="svc-status">Resolver active</span></div><div class="service-metrics"><div><span>Uptime</span><b id="host-uptime">-</b></div><div><span>CPU</span><b id="host-cpu">-</b></div><div><span>Memory</span><b id="host-mem">-</b></div></div></div></div></div>
+<nav id="tabs">
+<div class="nav-label main">Main Navigation</div>
+<div class="nav-label dns">DNS Control</div>
+<div class="nav-label system">System</div>
+<a class="on" data-t="dashboard"><span class="ico">▦</span>Dashboard</a>
+<a data-t="log"><span class="ico">≡</span>Query Log</a>
+<a data-t="records"><span class="ico">⌂</span>Local DNS</a>
+<a data-t="blocklist"><span class="ico">⊘</span>Blocklists</a>
+<a data-t="profiles"><span class="ico">◧</span>Profiles</a>
+<a data-t="upstreams"><span class="ico">⇄</span>Upstreams</a>
+<a data-t="clients"><span class="ico">◉</span>Clients</a>
+<a data-t="settings"><span class="ico">⚙</span>Settings</a>
+<a data-t="certs"><span class="ico">▣</span>Certificates</a>
+<a data-t="proxy"><span class="ico">⇌</span>Proxy</a>
+<a data-t="serverlog"><span class="ico">≡</span>Server Log</a>
+<a data-t="users"><span class="ico">☷</span>Users</a>
+</nav>
+<div class="account"><div class="account-label">Signed in</div><div id="account-user" class="account-user">-</div><a id="logout">Logout</a></div>
+</header>
+<main>
+<div id="t-dashboard" class="tp on">
+<div class="page-head"><div class="page-title"><h2>Dashboard</h2><p>Live DNS filtering, resolver health, and client activity.</p></div></div>
+<div class="stats">
+<div class="sc"><div class="l">Total Queries</div><div class="v" id="s-q">-</div><span class="wm globe"></span></div>
+<div class="sc"><div class="l">Blocked</div><div class="v" id="s-b">-</div><span class="wm hand"></span></div>
+<div class="sc"><div class="l">Local</div><div class="v" id="s-l">-</div><span class="wm house"></span></div>
+<div class="sc"><div class="l">Cached</div><div class="v" id="s-c">-</div><span class="wm pie"></span></div>
+<div class="sc"><div class="l">Forwarded</div><div class="v" id="s-f">-</div><span class="wm route"><i></i></span></div>
+<div class="sc"><div class="l">Domains on Blocklist</div><div class="v" id="s-d">-</div><span class="wm list"></span></div>
+</div>
+<div class="grid">
+<div class="dash-top">
+<div class="info" id="info"></div>
+<div class="panel"><h2>Recent Clients</h2><table><thead><tr><th>Name</th><th>IP</th><th>Queries</th></tr></thead><tbody id="dash-clients"></tbody></table></div>
+</div>
+<div class="panel"><h2>Traffic Mix</h2><div class="panel-body"><div class="chart" id="chart"></div></div></div>
+<div class="panel"><h2>Query Activity</h2><div class="panel-body"><div class="spark" id="activity"></div></div></div>
+</div>
+</div>
+<div id="t-records" class="tp">
+<div class="page-head"><div class="page-title"><h2>Local DNS Records</h2><p>Resolve LAN names and custom domains before forwarding upstream.</p></div></div>
+<div class="panel"><h2>Add Record</h2><div class="panel-body"><div class="fr">
+<input id="r-host" placeholder="Hostname" style="flex:1">
+<select id="r-type"><option>A</option><option>AAAA</option><option>CNAME</option><option>TXT</option><option>MX</option><option>SRV</option><option>PTR</option></select>
+<input id="r-ip" placeholder="Value / IP / target" style="flex:1">
+<input id="r-note" placeholder="Note" style="flex:1">
+<button id="btn-add-rec">Add Record</button>
+</div></div></div>
+<div class="panel"><h2>Import Zone File</h2><div class="panel-body"><div class="fr">
+<input id="import-path" placeholder="path/to/zone-file.txt" style="flex:2">
+<input id="import-file" type="file" accept=".txt,.zone,.bind,.dns" style="display:none">
+<button id="btn-browse-zone" class="ghost">Browse</button>
+<input id="import-zone" placeholder="Zone origin, e.g. moreno.land" style="flex:1">
+<label class="tog compact"><input id="import-overwrite" type="checkbox"> Overwrite</label>
+<button id="btn-import-zone">Import Records</button>
+<span id="import-result" class="muted"></span>
+</div></div></div>
+<div class="panel"><h2>Configured Records</h2>
+<table><thead><tr><th>Hostname</th><th>Type</th><th>Value</th><th>Note</th><th></th></tr></thead><tbody id="recs"></tbody></table>
+</div>
+</div>
+<div id="t-blocklist" class="tp">
+<div class="page-head"><div class="page-title"><h2>Blocklists</h2><p>Subscribed lists and manual deny rules used by DNSLeaf.</p></div><div class="toolbar"><select id="gravity-target"><option value="">All Lists</option></select><button id="btn-reload-bl">Update Gravity</button></div></div>
+<div class="panel"><h2>Manual Denylist</h2><div class="panel-body"><div class="fr">
+<select id="blk-context"><option value="custom">Custom</option></select>
+<input id="b-dom" placeholder="example.com, *.ads.com, ads*.site.com, regex:^tracker[0-9]+\.com$" style="flex:1">
+<button id="btn-add-blk">Block</button>
+</div><div class="fr" style="margin-top:10px">
+<input id="blk-filter" placeholder="Search blocked domains or source" style="flex:1">
+<select id="blk-page-size"><option>25</option><option selected>50</option><option>100</option><option>250</option></select>
+<span id="blk-count" class="muted"></span>
+</div></div>
+<table><thead><tr><th>Domain</th><th>Source</th><th></th></tr></thead><tbody id="blks"></tbody></table>
+<div class="panel-body"><div class="fr">
+<button id="blk-prev" class="ghost">Previous</button>
+<span id="blk-page" class="muted"></span>
+<button id="blk-next" class="ghost">Next</button>
+</div></div>
+</div>
+<div class="panel">
+<h2>Regex / Wildcard Rules</h2>
+<div class="panel-body"><div class="fr"><input id="rx-rule" placeholder="regex:^tracker[0-9]+\.com$ or *.ads.example" style="flex:1"><button id="btn-add-rx">Add Rule</button></div></div>
+<table><thead><tr><th>Rule</th><th></th></tr></thead><tbody id="rxs"></tbody></table>
+</div>
+<div class="panel">
+<h2>Groups</h2>
+<div class="panel-body">
+<div class="fr"><input id="grp-name" placeholder="Group name, e.g. Microsoft" style="flex:1"><textarea id="grp-domains" placeholder="One domain per line" style="flex:2;min-height:70px"></textarea><input id="grp-sources" placeholder="Assigned list source/name, one or comma separated" style="flex:1"><button id="btn-save-group">Save Group</button></div>
+</div>
+<table><thead><tr><th>Name</th><th>Domains</th><th>Assigned Sources</th><th></th></tr></thead><tbody id="groups"></tbody></table>
+</div>
+<div class="panel">
+<h2>Subscribed Blocklists</h2>
+<div class="panel-body"><div class="fr">
+<input id="bl-name" placeholder="Name" style="flex:1">
+<input id="bl-source" placeholder="Local path or https:// URL" style="flex:2">
+<button id="btn-add-list">Add List</button>
+</div></div>
+<table><thead><tr><th>Name</th><th>Source</th><th>Status</th><th>Loaded</th><th>Refreshed</th><th>Exceptions / Error</th><th></th></tr></thead><tbody id="lists"></tbody></table>
+</div>
+</div>
+<div id="gravity-modal" class="modal"><div class="dialog"><div class="dialog-head"><div><h2>Gravity Update</h2><div class="muted" id="gravity-state">Idle</div></div><button id="gravity-close" class="ghost">Close</button></div><div class="dialog-body"><pre id="gravity-log" class="console"></pre></div></div></div>
+<div id="t-upstreams" class="tp">
+<div class="page-head">
+<div class="page-title"><h2>Upstream Resolvers</h2><p>DNS servers used when a request is not answered locally or blocked.</p></div>
+<div class="toolbar">
+<input id="u-addr" placeholder="Add resolver, e.g. 1.1.1.1:53" style="flex:1">
+<button id="btn-add-up">Add Upstream</button>
+</div>
+</div>
+<div class="panel"><h2>Configured Resolvers</h2>
+<table><thead><tr><th>Address</th><th>Status</th><th></th></tr></thead><tbody id="ups"></tbody></table>
+</div>
+</div>
+<div id="t-clients" class="tp">
+<div class="page-head"><div class="page-title"><h2>Clients</h2><p>Name devices, assign profiles, review access, and manage resolver whitelist entries.</p></div><div class="toolbar"><button id="btn-clear-denied-clients" class="ghost">Clear Denied</button><button id="btn-load-clients" class="ghost">Refresh</button></div></div>
+<div class="panel"><h2>Profile Assignment</h2><div class="panel-body"><div class="fr"><input id="cp-ip" placeholder="Client IP or CIDR, e.g. 192.168.0.25 or 192.168.0.0/24" style="flex:1"><select id="cp-profile"></select><button id="btn-set-client-profile">Assign Profile</button></div></div></div>
+<div class="panel"><h2>Known Clients</h2>
+<table><thead><tr><th>Name</th><th>IP</th><th>Profile</th><th>LAN</th><th>Allowed</th><th>Queries</th><th>Denied</th><th>Trolled</th><th>Last Seen</th><th></th></tr></thead><tbody id="clients"></tbody></table>
+</div>
+</div>
+<div id="t-profiles" class="tp">
+<div class="page-head"><div class="page-title"><h2>Profiles</h2><p>Per-client filtering profiles with blocklist selection, overrides, and safe search.</p></div></div>
+<div class="panel"><h2>Create Profile</h2><div class="panel-body"><div class="fr"><input id="pf-name" placeholder="Profile name, e.g. kids" style="flex:1"><button id="btn-add-profile">Create Profile</button></div></div></div>
+<div class="panel"><h2>Configured Profiles</h2><table><thead><tr><th>Name</th><th>Mode</th><th>Blocklists</th><th>Allowed Overrides</th><th>Blocked Overrides</th><th></th></tr></thead><tbody id="profiles"></tbody></table></div>
+</div>
+<div id="t-log" class="tp">
+<div class="page-head"><div class="page-title"><h2>Query Log</h2><p>Recent DNS activity, answers, and filtering actions.</p></div><div class="toolbar"><input id="log-filter" placeholder="Filter by domain, client, answer, or action"><button id="btn-clear-log" class="ghost">Clear Log</button></div></div>
+<div class="panel"><h2>Recent Queries</h2>
+<table class="qlog"><thead><tr><th>Time</th><th>Client</th><th>Transport</th><th>Domain</th><th>Answer</th><th>Type</th><th>Action</th><th>Source</th><th>ms</th><th>Controls</th></tr></thead><tbody id="logs"></tbody></table>
+</div>
+</div>
+<div id="t-settings" class="tp">
+<div class="page-head"><div class="page-title"><h2>Settings</h2><p>Runtime DNS behavior, cache policy, and resolver access controls.</p></div></div>
+<div class="panel">
+<h2>DNS Settings</h2>
+<div class="panel-body">
+<div class="setting-section">
+<div class="setting-title">Bind Addresses</div>
+<div class="formgrid">
+<div class="field"><label for="set-listen">DNS listen address</label><input id="set-listen" placeholder=":53"><div class="hint">Address and port for DNS over UDP/TCP. Use <code>:53</code> for all interfaces.</div></div>
+<div class="field"><label for="set-http">Web panel listen address</label><input id="set-http" placeholder="127.0.0.1:8080"><div class="hint">Keep this on localhost for VPS use, then access it through SSH forwarding.</div></div>
+<div class="field"><label for="set-https">HTTPS web listen address</label><input id="set-https" placeholder=":8443"><div class="hint">Optional TLS admin panel address when certificate and key files are set.</div></div>
+<div class="field"><label for="set-cert">TLS certificate file</label><input id="set-cert" placeholder="cert.pem"><div class="hint">PEM certificate used by the HTTPS web panel.</div></div>
+<div class="field"><label for="set-key">TLS key file</label><input id="set-key" placeholder="key.pem"><div class="hint">PEM private key used by the HTTPS web panel.</div></div>
+<div class="field"><label for="set-portal-host">Portal hostname</label><input id="set-portal-host" placeholder="dns.leaf"><div class="hint">Local DNS name that resolves to this DNSLeaf admin server.</div></div>
+<div class="field"><label for="set-portal-ip">Portal IP address</label><input id="set-portal-ip" placeholder="127.0.0.1"><div class="hint">IP returned for the portal hostname.</div></div>
+</div>
+</div>
+<div class="setting-section">
+<div class="setting-title">Blocklist</div>
+<div class="formgrid">
+<div class="field"><label for="set-blocklist">Blocklist file</label><input id="set-blocklist" placeholder="blocklist.txt"><div class="hint">Local file loaded by Reload File and on startup.</div></div>
+</div>
+</div>
+<div class="setting-section">
+<div class="setting-title">Cache</div>
+<div class="formgrid">
+<div class="field"><label for="set-cache-size">Cache size</label><input id="set-cache-size" type="number" min="1" placeholder="1000"><div class="hint">Maximum number of DNS answers to keep in memory.</div></div>
+<div class="field"><label for="set-cache-ttl">Default cache TTL seconds</label><input id="set-cache-ttl" type="number" min="1" placeholder="300"><div class="hint">Fallback lifetime when an upstream response has no useful TTL.</div></div>
+<label class="tog"><input id="set-cache" type="checkbox"> Cache enabled</label>
+</div>
+</div>
+<div class="setting-section">
+<div class="setting-title">Access Policy</div>
+<div class="formgrid">
+<label class="tog"><input id="set-resolver-disabled" type="checkbox"> Disable resolver (pass through to upstream)</label>
+<label class="tog"><input id="set-lan" type="checkbox"> Allow LAN clients only</label>
+<label class="tog"><input id="set-whitelist-only" type="checkbox"> Whitelist only mode</label>
+<label class="tog"><input id="set-direct-override" type="checkbox"> Direct override for denied clients</label>
+<label class="tog"><input id="set-troll" type="checkbox"> Troll mode for denied clients</label>
+</div>
+<div class="fr" style="margin-top:12px">
+<div class="field" style="flex:1"><label for="set-whitelist">Allowed IPs / CIDRs</label><input id="set-whitelist" placeholder="203.0.113.10, 198.51.100.0/24"><div class="hint">Used by whitelist-only mode and as exceptions to LAN-only mode.</div></div>
+<button id="btn-save-settings">Save Settings</button>
+</div>
+<div class="formgrid" style="margin-top:12px">
+<div class="field"><label for="set-direct-to">Direct override target</label><input id="set-direct-to" placeholder="dns.leaf or 192.168.0.3"><div class="hint">Denied clients receive this record/IP for their DNS requests.</div></div>
+<div class="field"><label for="set-troll-hosts">Troll target sites</label><textarea id="set-troll-hosts" placeholder="4chan.org&#10;neopets.com&#10;homestarrunner.com"></textarea><div class="hint">Denied clients receive an IP from a random target site when Troll mode is enabled.</div></div>
+</div>
+<div class="muted">Whitelist-only mode is best when this runs on a public VPS.</div>
+</div>
+</div>
+</div>
+</div>
+<div id="t-proxy" class="tp">
+<div class="page-head"><div class="page-title"><h2>Proxy</h2><p>Optional HTTP CONNECT and SOCKS5 tunneling with DNSLeaf access policy.</p></div><div class="toolbar"><button id="btn-save-proxy">Save Proxy</button></div></div>
+<div class="stats">
+<div class="sc"><div class="l">HTTP Proxy</div><div class="v small" id="proxy-http-state">Off</div><span class="wm route"><i></i></span></div>
+<div class="sc"><div class="l">SOCKS5 Proxy</div><div class="v small" id="proxy-socks-state">Off</div><span class="wm route"><i></i></span></div>
+<div class="sc"><div class="l">Access Policy</div><div class="v small" id="proxy-policy-state">-</div><span class="wm hand"></span></div>
+</div>
+<div class="grid">
+<div class="panel">
+<h2>HTTP CONNECT Proxy</h2>
+<div class="panel-body">
+<div class="formgrid">
+<label class="tog"><input id="set-http-proxy-enabled" type="checkbox"> Enable HTTP proxy</label>
+<div class="field"><label for="set-http-proxy">Listen address</label><input id="set-http-proxy" placeholder="127.0.0.1:8088"><div class="hint">Use this as the HTTP/HTTPS proxy address in browsers or operating system proxy settings.</div></div>
+</div>
+<div class="info" style="margin-top:12px"><div class="ii"><div class="k">Client endpoint</div><div class="kv" id="proxy-http-url">disabled</div></div><div class="ii"><div class="k">Protocol</div><div class="kv">HTTP + CONNECT</div></div></div>
+</div>
+</div>
+<div class="panel">
+<h2>SOCKS5 Proxy</h2>
+<div class="panel-body">
+<div class="formgrid">
+<label class="tog"><input id="set-socks-proxy-enabled" type="checkbox"> Enable SOCKS5 proxy</label>
+<div class="field"><label for="set-socks-proxy">Listen address</label><input id="set-socks-proxy" placeholder="127.0.0.1:1080"><div class="hint">Use this as a SOCKS5 host/port in apps that support SOCKS tunneling.</div></div>
+</div>
+<div class="info" style="margin-top:12px"><div class="ii"><div class="k">Client endpoint</div><div class="kv" id="proxy-socks-url">disabled</div></div><div class="ii"><div class="k">Protocol</div><div class="kv">SOCKS5 TCP</div></div></div>
+</div>
+</div>
+<div class="panel">
+<h2>Guard Rails</h2>
+<div class="panel-body"><div class="info"><div class="ii"><div class="k">Allowed clients</div><div class="kv" id="proxy-allowed-state">-</div></div><div class="ii"><div class="k">Denied clients</div><div class="kv">no tunnel</div></div><div class="ii"><div class="k">Logging</div><div class="kv">server log</div></div></div></div>
+</div>
+</div>
+</div>
+<div id="t-certs" class="tp">
+<div class="page-head"><div class="page-title"><h2>Certificates</h2><p>Create offline TLS certificates for local DNSLeaf names, LAN services, and private domains.</p></div></div>
+<div class="panel">
+<h2>Self-Signed Certificate Authority / Server Certificate</h2>
+<div class="panel-body">
+<div class="formgrid">
+<div class="field"><label for="cert-cn">Common name</label><input id="cert-cn" placeholder="dns.leaf"><div class="hint">Primary name shown on the certificate. Browsers validate SANs, not only this field.</div></div>
+<div class="field"><label for="cert-dns">DNS subject alternative names</label><textarea id="cert-dns" placeholder="dns.leaf&#10;local.modem&#10;*.home.arpa"></textarea><div class="hint">One per line or comma-separated. Include every hostname that should pass TLS name validation.</div></div>
+<div class="field"><label for="cert-ips">IP subject alternative names</label><textarea id="cert-ips" placeholder="127.0.0.1&#10;192.168.0.1"></textarea><div class="hint">One per line or comma-separated. Required when browsing by IP address.</div></div>
+<div class="field"><label for="cert-org">Organization</label><input id="cert-org" placeholder="DNSLeaf local"><div class="hint">Optional certificate subject organization.</div></div>
+<div class="field"><label for="cert-days">Validity days</label><input id="cert-days" type="number" min="1" max="3650" placeholder="398"><div class="hint">398 days is a modern browser-friendly default for server certificates.</div></div>
+<div class="field"><label for="cert-key-type">Key type</label><select id="cert-key-type"><option value="ecdsa-p256">ECDSA P-256</option><option value="rsa-2048">RSA 2048</option><option value="rsa-3072">RSA 3072</option><option value="rsa-4096">RSA 4096</option></select><div class="hint">ECDSA P-256 is small, modern, and fast. RSA is available for older clients.</div></div>
+<div class="field"><label for="cert-cert-path">Certificate output file</label><input id="cert-cert-path" placeholder="certs/dnsleaf-cert.pem"><div class="hint">PEM certificate path written on this server.</div></div>
+<div class="field"><label for="cert-key-path">Private key output file</label><input id="cert-key-path" placeholder="certs/dnsleaf-key.pem"><div class="hint">PEM private key path. Keep this file private.</div></div>
+</div>
+<div class="fr" style="margin-top:12px">
+<label class="tog compact"><input id="cert-is-ca" type="checkbox"> Create CA certificate</label>
+<label class="tog compact"><input id="cert-apply" type="checkbox" checked> Use for DNSLeaf HTTPS panel</label>
+<input id="cert-https" placeholder="HTTPS listen address, e.g. :8443" style="max-width:260px">
+<button id="btn-create-cert">Create Certificate</button>
+</div>
+<div id="cert-result" class="muted" style="margin-top:12px"></div>
+</div>
+</div>
+<div class="panel">
+<h2>Certificate Notes</h2>
+<div class="panel-body muted">
+Self-signed certificates are encrypted and standards-shaped, but browsers will not trust them until you install the certificate or CA certificate into the client trust store. For public internet sites, use a public CA certificate when possible. For offline LAN use, create a CA certificate, trust that CA on your devices, then issue local server certificates from it in a future pass.
+</div>
+</div>
+</div>
+<div id="t-serverlog" class="tp">
+<div class="page-head"><div class="page-title"><h2>Server Log</h2><p>DNSLeaf runtime messages, listener events, and HTTP/TLS server errors.</p></div><div class="toolbar"><button id="btn-refresh-serverlog" class="ghost">Refresh</button><button id="btn-clear-serverlog" class="ghost">Clear Log</button></div></div>
+<div class="panel"><h2>Runtime Events</h2><div class="panel-body"><pre id="serverlog" style="white-space:pre-wrap;font-family:Consolas,'Courier New',monospace;line-height:1.45;color:#edf3f6;min-height:360px"></pre></div></div>
+</div>
+<div id="t-users" class="tp">
+<div class="page-head"><div class="page-title"><h2>Users</h2><p>Panel accounts and permission roles.</p></div></div>
+<div class="panel">
+<h2>Panel Users</h2>
+<div class="panel-body"><div class="fr">
+<input id="new-user" placeholder="Username">
+<input id="new-pass" type="password" placeholder="Password">
+<select id="new-role"><option value="viewer">Viewer</option><option value="admin">Admin</option></select>
+<button id="btn-add-user">Add User</button>
+</div></div>
+<table><thead><tr><th>User</th><th>Role</th><th>Created</th><th>Reset Password</th><th></th></tr></thead><tbody id="users"></tbody></table>
+</div>
+</div>
+</main>
+<div id="toasts" class="toast-wrap"></div>
+<script>
+var cur='dashboard',li,me={role:'viewer'},blkRows=[],blkPage=1,listsCache=[],groupsCache=[],listEntryCache={},profileCache={},defaultProfile='default',gravityTimer=null;
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function toast(msg,type){var wrap=document.getElementById('toasts'),el=document.createElement('div');el.className='toast '+(type||'');el.textContent=msg;wrap.appendChild(el);setTimeout(function(){el.style.opacity='0';el.style.transform='translateY(6px)';},2600);setTimeout(function(){el.remove();},3200)}
+function api(m,p,b){var o={method:m,headers:{'Content-Type':'application/json','X-DNSLeaf-Request':'1'}};if(b)o.body=JSON.stringify(b);return fetch(p,o).then(function(r){if(r.status===401){showLogin();return null;}if(r.status===204)return null;if(!r.ok)throw new Error(r.status);return r.json()}).catch(function(){toast('Request failed: '+p,'err');return null})}
+function showLogin(){document.getElementById('auth').classList.remove('hide');}
+function hideLogin(){document.getElementById('auth').classList.add('hide');}
+function loadRememberedLogin(){
+ try{
+  var u=localStorage.getItem('dnsleaf_user')||'';
+  if(u){document.getElementById('login-user').value=u;document.getElementById('remember-user').checked=true;}
+ }catch(e){}
+}
+function saveRememberedLogin(){
+ try{
+  var u=document.getElementById('login-user').value;
+  if(document.getElementById('remember-user').checked)localStorage.setItem('dnsleaf_user',u);else localStorage.removeItem('dnsleaf_user');
+  localStorage.removeItem('dnsleaf_pass');
+ }catch(e){}
+}
+function checkSession(){
+ api('GET','/api/session').then(function(s){
+  if(!s||!s.authenticated){showLogin();return;}
+  me=s;hideLogin();
+  document.getElementById('account-user').textContent=s.username;
+  if(s.role!=='admin')document.querySelector('[data-t="users"]').style.display='none';
+  loadSt();
+ });
+}
+function login(){
+ var u=document.getElementById('login-user').value,p=document.getElementById('login-pass').value;
+ api('POST','/api/login',{username:u,password:p}).then(function(s){
+ if(!s||!s.authenticated){document.getElementById('login-error').textContent='Invalid username or password';return;}
+ saveRememberedLogin();
+  document.getElementById('login-pass').value='';
+  checkSession();
+ });
+}
+function logout(){api('DELETE','/api/login').then(function(){showLogin();});}
+function sw(t){
+ if(!t)return;
+ document.querySelectorAll('.tp').forEach(function(e){e.classList.remove('on')});
+ document.querySelectorAll('#tabs a[data-t]').forEach(function(e){e.classList.remove('on')});
+ document.getElementById('t-'+t).classList.add('on');
+ document.querySelector('[data-t="'+t+'"]').classList.add('on');
+ location.hash=t;
+ cur=t;clearInterval(li);
+ if(t==='dashboard')loadSt();
+ if(t==='records')loadRec();
+ if(t==='blocklist')loadBlk();
+ if(t==='profiles')loadProfiles();
+ if(t==='upstreams')loadUp();
+ if(t==='clients'){loadProfiles(loadClients);}
+	if(t==='log'){loadLg();li=setInterval(loadLg,2000);}
+	if(t==='settings')loadSettings();
+	if(t==='certs')loadCertPage();
+	if(t==='proxy')loadSettings();
+	if(t==='serverlog')loadServerLog();
+	if(t==='users')loadUsers();
+}
+function drawChart(s){
+ var vals=[['Blocked',s.blocked,'#ff6363'],['Local',s.local,'#32d583'],['Cached',s.cached,'#f4bf50'],['Forwarded',s.forwarded,'#4da3ff']];
+ var max=Math.max(1,s.blocked,s.local,s.cached,s.forwarded), total=Math.max(1,s.blocked+s.local+s.cached+s.forwarded), h='';
+ var p1=s.forwarded/total*100,p2=p1+s.cached/total*100,p3=p2+s.local/total*100;
+ h='<div class="mix-donut" style="--fwd:'+p1+'%;--cache:'+p2+'%;--local:'+p3+'%"><div class="mix-total">'+total+'<span>queries</span></div></div><div class="mix-legend">';
+ vals.forEach(function(v){
+  var pct=Math.max(1,Math.round(v[1]/max*100));
+  h+='<div class="mix-row"><div class="mix-dot" style="background:'+v[2]+'"></div><div class="mix-name">'+v[0]+'</div><div class="mix-track"><div class="mix-fill" style="width:'+pct+'%;background:'+v[2]+'"></div></div><div class="mix-val">'+v[1]+'</div></div>';
+ });
+ h+='</div>';
+ document.getElementById('chart').innerHTML=h;
+}
+function drawActivity(){
+ api('GET','/api/log').then(function(d){
+  var el=document.getElementById('activity');if(!el)return;
+  if(!d||!d.length){el.innerHTML='<div class="empty" style="grid-column:1 / -1;width:100%">No query activity yet</div>';return;}
+  var count=30, step=60*1000, now=Date.now(), end=Math.ceil(now/step)*step, start=end-count*step, buckets=[];
+  for(var i=0;i<count;i++){
+   var t=start+i*step, dt=new Date(t);
+   buckets.push({total:0,blocked:0,local:0,cached:0,forwarded:0,label:String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0')});
+  }
+  d.forEach(function(e){
+   var ts=Number(e.ts||0);if(!ts||ts<start||ts>=end)return;
+   var b=Math.floor((ts-start)/step);if(b<0||b>=count)return;
+   var a=(e.action||'forwarded').toLowerCase();buckets[b].total++;
+   if(a==='blocked'||a==='denied')buckets[b].blocked++;
+   else if(a==='local')buckets[b].local++;
+   else if(a==='cached')buckets[b].cached++;
+   else buckets[b].forwarded++;
+  });
+  var realTotal=buckets.reduce(function(n,b){return n+b.total;},0);
+  if(!realTotal){el.innerHTML='<div class="empty" style="grid-column:1 / -1;width:100%">No query activity in the last 30 minutes</div>';return;}
+  var max=Math.max.apply(null,buckets.map(function(b){return b.total;}));if(max<1)max=1;
+  var top=Math.max(5,Math.ceil(max/5)*5), ticks=[], bars='', labels='';
+  for(var t=5;t>=0;t--)ticks.push('<span>'+Math.round(top*t/5)+'</span>');
+  buckets.forEach(function(b,i){
+   var h=b.total?Math.max(3,Math.round(b.total/top*285)):0, title=b.total+' queries';
+   var segs='', keys=['forwarded','cached','local','blocked'];
+   keys.forEach(function(k){if(b[k]>0){segs+='<div class="spark-seg '+k+'" style="height:'+Math.max(2,Math.round(b[k]/b.total*100))+'%"></div>'; }});
+   bars+='<div class="spark-col '+(b.total?'has':'')+'" title="'+title+'" style="--h:'+h+'px">'+segs+'</div>';
+   labels+=(i%5===0)?'<span>'+esc(b.label)+'</span>':'<span></span>';
+  });
+  var cols='repeat('+count+',minmax(4px,1fr))';
+  el.innerHTML='<div class="spark-ytitle">Queries</div><div class="spark-axis">'+ticks.join('')+'</div><div class="spark-plot" style="grid-template-columns:'+cols+'">'+bars+'</div><div class="spark-xaxis" style="grid-template-columns:'+cols+'">'+labels+'</div><div class="spark-xtitle">Time - last 30 minutes</div>';
+ });
+}
+function loadSt(){
+ api('GET','/api/status').then(function(d){
+  if(!d)return;
+  document.getElementById('s-q').textContent=d.stats.total_queries;
+  document.getElementById('s-b').textContent=d.stats.blocked;
+  document.getElementById('s-l').textContent=d.stats.local;
+  document.getElementById('s-c').textContent=d.stats.cached;
+  document.getElementById('s-f').textContent=d.stats.forwarded;
+  document.getElementById('s-d').textContent=d.blocked_count;
+  document.getElementById('svc-status').textContent=d.resolver_disabled?'Resolver disabled - pass through':(d.whitelist_only?'Whitelist protected':(d.lan_only?'Private resolver':'Resolver active'));
+  if(d.host){document.getElementById('host-uptime').textContent=d.uptime||'-';document.getElementById('host-cpu').textContent=d.host.cpu||'-';document.getElementById('host-mem').textContent=d.host.memory||'-';}
+  document.getElementById('info').innerHTML=
+   '<div class="ii"><div class="k">Uptime</div><div class="kv">'+esc(d.uptime)+'</div></div>'+
+   '<div class="ii"><div class="k">Upstreams</div><div class="kv">'+d.active_upstreams+' / '+d.upstream_count+' active</div></div>'+
+   '<div class="ii"><div class="k">Local Records</div><div class="kv">'+d.records_count+'</div></div>'+
+   '<div class="ii"><div class="k">Known Clients</div><div class="kv">'+d.client_count+'</div></div>'+
+   '<div class="ii"><div class="k">DNS Listen</div><div class="kv">'+esc(d.listen)+'</div></div>'+
+   '<div class="ii"><div class="k">Resolver</div><div class="kv">'+(d.resolver_disabled?'disabled - pass through':'active')+'</div></div>'+
+   '<div class="ii"><div class="k">Access Policy</div><div class="kv">'+(d.whitelist_only?'whitelist protected':(d.lan_only?'private networks':'open resolver'))+'</div></div>'+
+   '<div class="ii"><div class="k">Cache</div><div class="kv">'+(d.cache_enabled?'on':'off')+'</div></div>';
+  drawChart(d.stats);
+  drawActivity();
+  loadDashClients();
+ });
+}
+function loadRec(){
+ api('GET','/api/records').then(function(d){
+  var tb=document.getElementById('recs');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="5" class="empty">No local records configured</td></tr>';return;}
+  tb.innerHTML=d.map(function(r){
+   var typ=(r.type||(/:/.test(r.ip||'')?'AAAA':'A')).toUpperCase(),val=r.value||r.ip||'';
+   return '<tr><td><input value="'+esc(r.host)+'" data-old-host="'+esc(r.host)+'" data-old-ip="'+esc(r.ip||val)+'" class="rec-host"></td><td><select class="rec-type"><option '+(typ==='A'?'selected':'')+'>A</option><option '+(typ==='AAAA'?'selected':'')+'>AAAA</option><option '+(typ==='CNAME'?'selected':'')+'>CNAME</option><option '+(typ==='TXT'?'selected':'')+'>TXT</option><option '+(typ==='MX'?'selected':'')+'>MX</option><option '+(typ==='SRV'?'selected':'')+'>SRV</option><option '+(typ==='PTR'?'selected':'')+'>PTR</option></select></td><td><input value="'+esc(val)+'" class="rec-ip"></td><td><input value="'+esc(r.note||'')+'" class="rec-note" placeholder="Note"></td><td><button class="sm ok" onclick="saveRec(this)">Save</button> <button class="sm dg" data-ip="'+esc(r.ip||val)+'" data-host="'+esc(r.host)+'" onclick="delRec(this)">Remove</button></td></tr>';
+  }).join('');
+ });
+}
+function addRec(){
+ var h=document.getElementById('r-host').value,i=document.getElementById('r-ip').value,t=document.getElementById('r-type').value,n=document.getElementById('r-note').value;
+ if(!h||!i)return;
+ api('POST','/api/records',{host:h,type:t,value:i,ip:i,note:n}).then(function(){document.getElementById('r-host').value='';document.getElementById('r-ip').value='';document.getElementById('r-note').value='';loadRec();});
+}
+function saveRec(btn){
+ var tr=btn.closest('tr'),h=tr.querySelector('.rec-host'),i=tr.querySelector('.rec-ip');
+ api('PUT','/api/records',{old_host:h.dataset.oldHost,old_ip:h.dataset.oldIp,host:h.value,type:tr.querySelector('.rec-type').value,value:i.value,ip:i.value,note:tr.querySelector('.rec-note').value}).then(loadRec);
+}
+function delRec(el){api('DELETE','/api/records',{ip:el.dataset.ip,host:el.dataset.host}).then(loadRec);}
+function importZone(){
+ var p=document.getElementById('import-path').value,z=document.getElementById('import-zone').value,f=document.getElementById('import-file').files[0];
+ if(f){
+  var fd=new FormData();
+  fd.append('file',f);fd.append('zone',z);fd.append('overwrite',document.getElementById('import-overwrite').checked?'true':'false');
+  fetch('/api/records/import',{method:'POST',headers:{'X-DNSLeaf-Request':'1'},body:fd}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(r){
+   document.getElementById('import-result').textContent='Imported '+r.imported+', skipped '+r.skipped;
+   document.getElementById('import-file').value='';
+   loadRec();
+  }).catch(function(){toast('Zone import failed','err');});
+  return;
+ }
+ if(!p)return;
+ api('POST','/api/records/import',{path:p,zone:z,overwrite:document.getElementById('import-overwrite').checked}).then(function(r){
+  document.getElementById('import-result').textContent=r?('Imported '+r.imported+', skipped '+r.skipped):'Import failed';
+  loadRec();
+ });
+}
+function browseZone(){document.getElementById('import-file').click();}
+function pickedZone(){
+ var f=document.getElementById('import-file').files[0];
+ if(f)document.getElementById('import-path').value=f.name;
+}
+function loadBlk(){
+ loadLists();
+ loadGroups();
+ loadRegex();
+ api('GET','/api/blocked').then(function(d){
+  blkRows=(d||[]).sort(function(a,b){return (a.domain||'').localeCompare(b.domain||'')});
+  blkPage=1;
+  renderBlk();
+ });
+}
+function contextRows(){
+ var ctx=document.getElementById('blk-context').value||'custom';
+ if(ctx.indexOf('list:')===0){
+  var src=ctx.slice(5),list=listsCache.find(function(l){return l.source===src;});
+  if(!listEntryCache[src]){loadListEntries(src);return {kind:'list',title:list?(list.name||list.source):src,total:0,rows:[],loading:true};}
+  return {kind:'list',title:list?(list.name||list.source):src,total:listEntryCache[src].length,rows:listEntryCache[src]};
+ }
+ if(ctx.indexOf('group:')===0){
+  var name=ctx.slice(6),group=groupsCache.find(function(g){return g.name===name;});
+  return {kind:'group',title:name,total:(group&&group.domains||[]).length,rows:(group&&group.domains||[]).map(function(d){return {domain:d,source:'group: '+name}})};
+ }
+ return {kind:'custom',title:'Custom',total:blkRows.length,rows:blkRows};
+}
+function renderBlk(){
+ var tb=document.getElementById('blks'),filter=(document.getElementById('blk-filter')&&document.getElementById('blk-filter').value||'').toLowerCase();
+ var size=parseInt(document.getElementById('blk-page-size').value,10)||50;
+ var ctx=contextRows();
+ var rows=ctx.rows.filter(function(b){return !filter||[b.domain,b.source].join(' ').toLowerCase().indexOf(filter)>=0;});
+ var pages=Math.max(1,Math.ceil(rows.length/size));if(blkPage>pages)blkPage=pages;if(blkPage<1)blkPage=1;
+ document.getElementById('blk-count').textContent=ctx.title+': '+rows.length+' shown / '+ctx.total+' total';
+ document.getElementById('blk-page').textContent='Page '+blkPage+' of '+pages;
+ document.getElementById('blk-prev').disabled=blkPage<=1;document.getElementById('blk-next').disabled=blkPage>=pages;
+ if(!rows.length){tb.innerHTML='<tr><td colspan="3" class="empty">No blocked domains</td></tr>';return;}
+ tb.innerHTML=rows.slice((blkPage-1)*size,blkPage*size).map(function(b){
+   var ctl=ctx.kind==='list'?'<span class="muted">source managed</span>':'<button class="sm dg" data-domain="'+esc(b.domain)+'" onclick="delBlk(this)">Remove</button>';
+   return '<tr><td><code>'+esc(b.domain)+'</code></td><td>'+esc(b.source)+'</td><td>'+ctl+'</td></tr>';
+  }).join('');
+}
+function loadListEntries(src){
+ listEntryCache[src]=[];
+ api('GET','/api/blocklists/entries?source='+encodeURIComponent(src)).then(function(d){
+  listEntryCache[src]=(d||[]).sort(function(a,b){return (a.domain||'').localeCompare(b.domain||'')});
+  renderBlk();
+ });
+}
+function addBlk(){
+ var d=document.getElementById('b-dom').value;if(!d)return;
+ var ctx=document.getElementById('blk-context').value||'custom';
+ if(ctx.indexOf('list:')===0){
+  toast('Subscribed lists are read-only here. Use Custom denylist or Groups to add manual blocks.','err');
+  return;
+ }
+ if(ctx.indexOf('group:')===0){
+  var name=ctx.slice(6),group=groupsCache.find(function(g){return g.name===name;});if(!group)return;
+  group.domains=(group.domains||[]).concat(d.split(/[,\n]/).map(function(x){return x.trim();}).filter(Boolean));
+  api('POST','/api/block-groups',group).then(function(){document.getElementById('b-dom').value='';loadBlk();toast('Group updated','ok');});
+  return;
+ }
+ api('POST','/api/blocked',{domain:d}).then(function(){document.getElementById('b-dom').value='';loadBlk();toast('Domain blocked','ok');});
+}
+function delBlk(el){
+ var ctx=document.getElementById('blk-context').value||'custom',dom=el.dataset.domain;
+ if(ctx.indexOf('list:')===0){
+  toast('Subscribed list entries are managed by the source list. Add an exception in the Subscribed Blocklists table.','err');
+  return;
+ }
+ if(ctx.indexOf('group:')===0){
+  var name=ctx.slice(6),group=groupsCache.find(function(g){return g.name===name;});if(!group)return;
+  group.domains=(group.domains||[]).filter(function(x){return x!==dom;});
+  api('POST','/api/block-groups',group).then(function(){loadBlk();toast('Group updated','ok');});
+  return;
+ }
+ api('DELETE','/api/blocked',{domain:dom}).then(function(){loadBlk();toast('Domain removed','ok');});
+}
+function loadLists(){
+ api('GET','/api/blocklists').then(function(d){
+  listsCache=d||[];
+  renderBlockContextOptions();
+  renderGravityOptions();
+  var tb=document.getElementById('lists');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="7" class="empty">No subscribed blocklists</td></tr>';return;}
+  tb.innerHTML=d.map(function(l,i){
+   return '<tr><td><input value="'+esc(l.name||'')+'" class="list-name"></td><td><code>'+esc(l.source)+'</code></td><td><span class="tag '+(l.enabled?'tag-on':'tag-off')+'">'+(l.enabled?'enabled':'disabled')+'</span></td><td>'+((l.last_loaded||0))+'</td><td>'+esc(l.last_refreshed||'-')+'</td><td><textarea class="list-allow" placeholder="One exception per line">'+esc((l.allowlist||[]).join('\n'))+'</textarea><input class="list-groups" placeholder="Assigned groups, comma separated" value="'+esc((l.groups||[]).join(', '))+'"><div class="muted">'+esc(l.last_error||'')+'</div></td><td><button class="sm ok" data-source="'+esc(l.source)+'" onclick="saveList(this)">Save</button> <button class="sm ghost" data-source="'+esc(l.source)+'" onclick="refreshList(this)">Refresh</button> <button class="sm ghost" data-source="'+esc(l.source)+'" data-enabled="'+l.enabled+'" onclick="togList(this)">'+(l.enabled?'Disable':'Enable')+'</button> <button class="sm dg" data-source="'+esc(l.source)+'" onclick="delList(this)">Remove</button></td></tr>';
+  }).join('');
+ });
+}
+function renderBlockContextOptions(){
+ var sel=document.getElementById('blk-context'),curv=sel.value||'custom',opts=['<option value="custom">Custom denylist</option>'];
+ if(listsCache.length){
+  opts.push('<optgroup label="Subscribed blocklists">');
+  listsCache.forEach(function(l){opts.push('<option value="list:'+esc(l.source)+'">'+esc(l.name||l.source)+'</option>')});
+  opts.push('</optgroup>');
+ }
+ if(groupsCache.length){
+  opts.push('<optgroup label="Groups">');
+  groupsCache.forEach(function(g){opts.push('<option value="group:'+esc(g.name)+'">'+esc(g.name)+'</option>')});
+  opts.push('</optgroup>');
+ }
+ sel.innerHTML=opts.join('');
+ if([].slice.call(sel.options).some(function(o){return o.value===curv}))sel.value=curv;
+ renderBlk();
+}
+function renderGravityOptions(){
+ var sel=document.getElementById('gravity-target'),curv=sel.value||'',opts=['<option value="">All Lists</option>'];
+ listsCache.forEach(function(l){opts.push('<option value="'+esc(l.source)+'">'+esc(l.name||l.source)+'</option>')});
+ sel.innerHTML=opts.join('');
+ if([].slice.call(sel.options).some(function(o){return o.value===curv}))sel.value=curv;
+}
+function loadGroups(){
+ api('GET','/api/block-groups').then(function(d){groupsCache=d||[];renderGroups();renderBlockContextOptions();});
+}
+function renderGroups(){
+ var tb=document.getElementById('groups');if(!tb)return;
+ if(!groupsCache.length){tb.innerHTML='<tr><td colspan="4" class="empty">No groups configured</td></tr>';return;}
+ tb.innerHTML=groupsCache.map(function(g){
+  return '<tr><td><input class="grp-row-name" value="'+esc(g.name)+'" data-old="'+esc(g.name)+'"></td><td><textarea class="grp-row-domains">'+esc((g.domains||[]).join('\n'))+'</textarea></td><td><textarea class="grp-row-sources">'+esc((g.sources||[]).join('\n'))+'</textarea></td><td><button class="sm ok" onclick="saveGroupRow(this)">Save</button> <button class="sm dg" data-name="'+esc(g.name)+'" onclick="delGroup(this)">Remove</button></td></tr>';
+ }).join('');
+}
+function splitLines(v){return (v||'').split(/[,\n]/).map(function(x){return x.trim();}).filter(Boolean);}
+function saveGroup(){
+ var name=document.getElementById('grp-name').value.trim();if(!name)return;
+ api('POST','/api/block-groups',{name:name,domains:splitLines(document.getElementById('grp-domains').value),sources:splitLines(document.getElementById('grp-sources').value)}).then(function(){document.getElementById('grp-name').value='';document.getElementById('grp-domains').value='';document.getElementById('grp-sources').value='';loadBlk();toast('Group saved','ok');});
+}
+function saveGroupRow(btn){
+ var tr=btn.closest('tr'),name=tr.querySelector('.grp-row-name').value.trim(),old=tr.querySelector('.grp-row-name').dataset.old;
+ api('POST','/api/block-groups',{old_name:old,name:name,domains:splitLines(tr.querySelector('.grp-row-domains').value),sources:splitLines(tr.querySelector('.grp-row-sources').value)}).then(function(){loadBlk();toast('Group saved','ok');});
+}
+function delGroup(btn){api('DELETE','/api/block-groups',{name:btn.dataset.name}).then(function(){loadBlk();toast('Group removed','ok');});}
+function loadRegex(){
+ api('GET','/api/regex-rules').then(function(d){
+  var tb=document.getElementById('rxs');if(!tb)return;
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="2" class="empty">No regex or wildcard rules</td></tr>';return;}
+  tb.innerHTML=d.map(function(r){return '<tr><td><code>'+esc(r)+'</code></td><td><button class="sm dg" data-rule="'+esc(r)+'" onclick="delRegex(this)">Remove</button></td></tr>';}).join('');
+ });
+}
+function addRegex(){
+ var r=document.getElementById('rx-rule').value;if(!r)return;
+ api('POST','/api/regex-rules',{rule:r}).then(function(){document.getElementById('rx-rule').value='';loadRegex();loadBlk();});
+}
+function delRegex(btn){api('DELETE','/api/regex-rules',{rule:btn.dataset.rule}).then(function(){loadRegex();loadBlk();});}
+function addList(){
+ var n=document.getElementById('bl-name').value,s=document.getElementById('bl-source').value;if(!s)return;
+	api('POST','/api/blocklists',{name:n,source:s}).then(function(){document.getElementById('bl-name').value='';document.getElementById('bl-source').value='';loadBlk();loadSt();toast('Blocklist updated','ok');});
+}
+function listAllow(tr){return splitLines(tr.querySelector('.list-allow').value);}
+function listGroups(tr){return splitLines(tr.querySelector('.list-groups').value);}
+function saveList(btn){var tr=btn.closest('tr');api('PATCH','/api/blocklists',{source:btn.dataset.source,name:tr.querySelector('.list-name').value,enabled:tr.querySelector('.tag').textContent==='enabled',allowlist:listAllow(tr),groups:listGroups(tr)}).then(function(){loadBlk();loadSt();toast('Blocklist saved','ok');});}
+function refreshList(btn){startGravity(btn.dataset.source);}
+function togList(btn){api('PATCH','/api/blocklists',{source:btn.dataset.source,enabled:btn.dataset.enabled!=='true'}).then(function(){loadBlk();loadSt();toast('Blocklist updated','ok');});}
+function delList(btn){api('DELETE','/api/blocklists',{source:btn.dataset.source}).then(function(){loadBlk();loadSt();toast('Blocklist removed','ok');});}
+function startGravity(target){
+ document.getElementById('gravity-modal').classList.add('show');
+ document.getElementById('gravity-log').textContent='starting...\n';
+ api('POST','/api/gravity/start',{target:target||''}).then(function(){pollGravity(true);});
+}
+function pollGravity(force){
+ if(gravityTimer&&!force)return;
+ api('GET','/api/gravity/progress').then(function(p){
+  if(!p)return;
+  document.getElementById('gravity-state').textContent=(p.running?'Running':'Idle')+(p.target?' - '+p.target:'')+(p.error?' - '+p.error:'');
+  document.getElementById('gravity-log').textContent=(p.lines||[]).join('\n')||'No gravity activity yet.';
+  document.getElementById('gravity-log').scrollTop=document.getElementById('gravity-log').scrollHeight;
+  if(p.running){
+   gravityTimer=setTimeout(function(){gravityTimer=null;pollGravity(true);},900);
+  }else{
+   gravityTimer=null;
+   loadBlk();loadSt();
+  }
+ });
+}
+function loadUp(){
+ api('GET','/api/upstreams').then(function(d){
+  var tb=document.getElementById('ups');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="3" class="empty">No upstreams - DNS forwarding disabled</td></tr>';return;}
+  tb.innerHTML=d.map(function(u){
+   return '<tr><td><code>'+esc(u.address)+'</code></td><td><span class="tag '+(u.enabled?'tag-on':'tag-off')+'">'+(u.enabled?'enabled':'disabled')+'</span></td><td><button class="sm ghost" data-addr="'+esc(u.address)+'" data-enabled="'+u.enabled+'" onclick="togUp(this)">'+(u.enabled?'Disable':'Enable')+'</button> <button class="sm dg" data-addr="'+esc(u.address)+'" onclick="delUp(this)">Remove</button></td></tr>';
+  }).join('');
+ });
+}
+function addUp(){
+ var a=document.getElementById('u-addr').value;if(!a)return;
+ api('POST','/api/upstreams',{address:a}).then(function(){document.getElementById('u-addr').value='';loadUp();});
+}
+function togUp(el){api('PATCH','/api/upstreams',{address:el.dataset.addr,enabled:el.dataset.enabled!=='true'}).then(loadUp);}
+function delUp(el){api('DELETE','/api/upstreams',{address:el.dataset.addr}).then(loadUp);}
+function profileOptions(selected){
+ var names=Object.keys(profileCache).sort(),h='<option value="">Default ('+esc(defaultProfile)+')</option>';
+ names.forEach(function(n){h+='<option value="'+esc(n)+'" '+(selected===n?'selected':'')+'>'+esc(n)+'</option>';});
+ return h;
+}
+function blocklistChecks(selected){
+ selected=selected||[];
+ return listsCache.map(function(l){
+  var name=l.name||l.source,on=selected.indexOf(name)>=0||selected.indexOf(l.source)>=0;
+  return '<label class="tog compact"><input type="checkbox" class="pf-list" value="'+esc(name)+'" '+(on?'checked':'')+'> '+esc(name)+'</label>';
+ }).join('');
+}
+function loadProfiles(done){
+ api('GET','/api/profiles').then(function(d){
+  if(!d)return;
+  profileCache=d.profiles||{};
+  defaultProfile=d.default_profile||'default';
+  var finish=function(){renderProfileSelectors();renderProfiles();if(done)done();};
+  if(!listsCache.length){api('GET','/api/blocklists').then(function(l){listsCache=l||[];finish();});}else finish();
+ });
+}
+function renderProfileSelectors(){
+ var sel=document.getElementById('cp-profile');if(sel)sel.innerHTML=profileOptions('');
+}
+function renderProfiles(){
+ var tb=document.getElementById('profiles');if(!tb)return;
+ var names=Object.keys(profileCache).sort();
+ if(!names.length){tb.innerHTML='<tr><td colspan="6" class="empty">No profiles configured</td></tr>';return;}
+ tb.innerHTML=names.map(function(name){
+  var p=profileCache[name]||{},built=(name==='default'||name==='off');
+  return '<tr><td><input class="pf-row-name" value="'+esc(name)+'" data-old="'+esc(name)+'" '+(built?'readonly':'')+'></td><td><label class="tog compact"><input class="pf-disable" type="checkbox" '+(p.disable_blocking?'checked':'')+'> Disable blocking</label><label class="tog compact"><input class="pf-safe" type="checkbox" '+(p.safe_search?'checked':'')+'> Safe search</label><label class="tog compact"><input class="pf-default" type="radio" name="pf-default" '+(name===defaultProfile?'checked':'')+'> Default</label></td><td><div class="profile-lists">'+blocklistChecks(p.blocklists||[])+'</div></td><td><textarea class="pf-allow" placeholder="One allowed domain per line">'+esc((p.allowed||[]).join('\n'))+'</textarea></td><td><textarea class="pf-block" placeholder="One blocked domain per line">'+esc((p.blocked||[]).join('\n'))+'</textarea></td><td><button class="sm ok" onclick="saveProfileRow(this)">Save</button> '+(built?'':'<button class="sm dg" data-name="'+esc(name)+'" onclick="delProfile(this)">Remove</button>')+'</td></tr>';
+ }).join('');
+}
+function profileFromRow(tr){
+ var old=tr.querySelector('.pf-row-name').dataset.old,name=tr.querySelector('.pf-row-name').value.trim();
+ return {old_name:old,name:name,default_profile:tr.querySelector('.pf-default').checked,profile:{disable_blocking:tr.querySelector('.pf-disable').checked,safe_search:tr.querySelector('.pf-safe').checked,blocklists:[].slice.call(tr.querySelectorAll('.pf-list:checked')).map(function(x){return x.value;}),allowed:splitLines(tr.querySelector('.pf-allow').value),blocked:splitLines(tr.querySelector('.pf-block').value)}};
+}
+function addProfile(){
+ var name=document.getElementById('pf-name').value.trim();if(!name)return;
+ api('POST','/api/profiles',{name:name,profile:{blocked:[],allowed:[]}}).then(function(){document.getElementById('pf-name').value='';loadProfiles();toast('Profile created','ok');});
+}
+function saveProfileRow(btn){api('POST','/api/profiles',profileFromRow(btn.closest('tr'))).then(function(){loadProfiles();toast('Profile saved','ok');});}
+function delProfile(btn){api('DELETE','/api/profiles/'+encodeURIComponent(btn.dataset.name)).then(function(){loadProfiles();toast('Profile removed','ok');});}
+function assignClientProfile(){
+ var ip=document.getElementById('cp-ip').value.trim(),profile=document.getElementById('cp-profile').value;
+ if(!ip)return;
+ api('POST','/api/clients/'+encodeURIComponent(ip)+'/profile',{profile:profile}).then(function(){document.getElementById('cp-ip').value='';loadClients();toast('Client profile assigned','ok');});
+}
+function loadClients(){
+ api('GET','/api/clients').then(function(d){
+  var tb=document.getElementById('clients');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="10" class="empty">No clients have queried DNSLeaf yet</td></tr>';return;}
+  tb.innerHTML=d.sort(function(a,b){return b.queries-a.queries}).map(function(c){
+   return '<tr><td><input value="'+esc(c.name||'')+'" placeholder="Name" class="c-name"></td><td><code>'+esc(c.ip)+'</code></td><td><select class="c-profile">'+profileOptions(c.profile||'')+'</select></td><td>'+(c.lan?'yes':'no')+'</td><td><span class="tag '+(c.allowed?'tag-on':'tag-denied')+'">'+(c.allowed?'allowed':'denied')+'</span></td><td>'+c.queries+'</td><td>'+((c.denied||0))+'</td><td>'+((c.trolled||0))+'</td><td>'+esc(c.last_seen)+'</td><td><button class="sm ok" data-ip="'+esc(c.ip)+'" data-white="'+c.whitelisted+'" onclick="saveClient(this)">Save</button> <button class="sm ghost" data-ip="'+esc(c.ip)+'" data-white="'+c.whitelisted+'" onclick="whiteClient(this)">'+(c.whitelisted?'Unwhitelist':'Whitelist')+'</button> <button class="sm dg" data-ip="'+esc(c.ip)+'" onclick="deleteClient(this)">Remove</button></td></tr>';
+  }).join('');
+ });
+}
+function loadDashClients(){
+ api('GET','/api/clients').then(function(d){
+  var tb=document.getElementById('dash-clients');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="3" class="empty">No clients yet</td></tr>';return;}
+  tb.innerHTML=d.sort(function(a,b){return b.queries-a.queries}).slice(0,6).map(function(c){
+   return '<tr><td>'+esc(c.name||'Unknown')+'</td><td><code>'+esc(c.ip)+'</code></td><td>'+c.queries+'</td></tr>';
+  }).join('');
+ });
+}
+function saveClient(btn){
+ var tr=btn.closest('tr'),name=tr.querySelector('.c-name').value;
+ api('PATCH','/api/clients',{ip:btn.dataset.ip,name:name,profile:tr.querySelector('.c-profile').value}).then(loadClients);
+}
+function whiteClient(btn){
+ api('PATCH','/api/clients',{ip:btn.dataset.ip,name:btn.closest('tr').querySelector('.c-name').value,profile:btn.closest('tr').querySelector('.c-profile').value,whitelisted:btn.dataset.white!=='true'}).then(loadClients);
+}
+function deleteClient(btn){
+ api('DELETE','/api/clients',{ip:btn.dataset.ip}).then(function(){toast('Client removed','ok');loadClients();});
+}
+function clearDeniedClients(){
+ api('POST','/api/clients/clear-denied',{}).then(function(r){toast('Cleared '+((r&&r.removed)||0)+' denied clients','ok');loadClients();});
+}
+function loadLg(){
+ api('GET','/api/log').then(function(d){
+  var tb=document.getElementById('logs');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="10" class="empty">No queries yet</td></tr>';return;}
+  var f=(document.getElementById('log-filter')&&document.getElementById('log-filter').value||'').toLowerCase();
+  var rows=d.reverse().filter(function(e){
+   if(!f)return true;
+   return [e.time,e.client,e.client_ip,e.client_name,e.transport,e.domain,e.answers,e.type,e.action,e.block_source].join(' ').toLowerCase().indexOf(f)>=0;
+  });
+  if(!rows.length){tb.innerHTML='<tr><td colspan="10" class="empty">No matching queries</td></tr>';return;}
+  tb.innerHTML=rows.map(function(e){
+   var c=e.client_name?e.client_name+' ('+e.client_ip+')':e.client_ip;
+   var ans=e.answers||'-';
+   return '<tr><td class="nowrap">'+esc(e.time)+'</td><td title="'+esc(e.client||'')+'">'+esc(c)+'</td><td><code>'+esc(e.transport||'-')+'</code></td><td><code>'+esc(e.domain)+'</code></td><td><code>'+esc(ans)+'</code></td><td>'+esc(e.type)+'</td><td><span class="tag tag-'+esc(e.action)+'">'+esc(e.action)+'</span></td><td><code>'+esc(e.block_source||'-')+'</code></td><td>'+e.duration_ms+'</td><td><div class="actions"><button class="sm dg" title="Block domain" data-domain="'+esc(e.domain)+'" onclick="blockFromLog(this)">D-</button><button class="sm ok" title="Allow domain" data-domain="'+esc(e.domain)+'" onclick="allowFromLog(this)">D+</button><button class="sm dg" title="Block returned IP" data-answer="'+esc(ans)+'" onclick="blockIPFromLog(this)">IP-</button><button class="sm ghost" title="Copy returned IP" data-answer="'+esc(ans)+'" onclick="copyAnswer(this)">CP</button></div></td></tr>';
+  }).join('');
+ });
+}
+function blockFromLog(btn){
+ api('POST','/api/blocked',{domain:btn.dataset.domain}).then(function(r){if(r){toast('Blocked '+btn.dataset.domain,'ok')}loadLg();if(cur==='blocklist')loadBlk();});
+}
+function allowFromLog(btn){
+ api('POST','/api/allowed',{domain:btn.dataset.domain}).then(function(r){if(r){toast('Allowed '+btn.dataset.domain,'ok')}loadLg();});
+}
+function blockIPFromLog(btn){
+ var ip=(btn.dataset.answer||'').split(',')[0].trim();if(!ip||ip==='-'){toast('No IP answer to block','err');return;}
+ api('POST','/api/blocked-ips',{ip:ip}).then(function(r){if(r){toast('Blocked IP '+ip,'ok')}loadLg();});
+}
+function copyAnswer(btn){
+ if(navigator.clipboard)navigator.clipboard.writeText(btn.dataset.answer||'');
+ toast('Copied answer','ok');
+}
+function loadSettings(){
+ api('GET','/api/settings').then(function(d){
+  if(!d)return;
+  document.getElementById('set-listen').value=d.listen||'';
+  document.getElementById('set-http').value=d.http||'';
+  document.getElementById('set-https').value=d.https||'';
+  document.getElementById('set-cert').value=d.tls_cert_file||'';
+  document.getElementById('set-key').value=d.tls_key_file||'';
+  document.getElementById('set-portal-host').value=d.portal_host||'dns.leaf';
+  document.getElementById('set-portal-ip').value=d.portal_ip||'127.0.0.1';
+  document.getElementById('set-blocklist').value=d.blocklist_file||'';
+  document.getElementById('set-cache').checked=!!d.cache_enabled;
+  document.getElementById('set-cache-size').value=d.cache_size||1000;
+  document.getElementById('set-cache-ttl').value=d.cache_ttl_seconds||300;
+  document.getElementById('set-resolver-disabled').checked=!!d.resolver_disabled;
+  document.getElementById('set-lan').checked=!!d.lan_only;
+  document.getElementById('set-whitelist-only').checked=!!d.whitelist_only;
+  document.getElementById('set-whitelist').value=(d.whitelist||[]).join(', ');
+  document.getElementById('set-direct-override').checked=!!d.direct_override;
+  document.getElementById('set-direct-to').value=d.direct_override_to||d.portal_host||'dns.leaf';
+  document.getElementById('set-troll').checked=!!d.troll_mode;
+  document.getElementById('set-troll-hosts').value=(d.troll_hosts||[]).join('\n');
+  document.getElementById('set-http-proxy-enabled').checked=!!d.http_proxy_enabled;
+  document.getElementById('set-http-proxy').value=d.http_proxy||'';
+  document.getElementById('set-socks-proxy-enabled').checked=!!d.socks_proxy_enabled;
+  document.getElementById('set-socks-proxy').value=d.socks_proxy||'';
+  renderProxyState(d);
+ });
+}
+function renderProxyState(d){
+ var hp=d.http_proxy||'',sp=d.socks_proxy||'',he=!!d.http_proxy_enabled&&!!hp,se=!!d.socks_proxy_enabled&&!!sp;
+ document.getElementById('proxy-http-state').textContent=he?'On':'Off';
+ document.getElementById('proxy-socks-state').textContent=se?'On':'Off';
+ document.getElementById('proxy-http-url').textContent=he?hp:'disabled';
+ document.getElementById('proxy-socks-url').textContent=se?sp:'disabled';
+ var policy=d.whitelist_only?'whitelist':(d.lan_only?'LAN only':'open');
+ document.getElementById('proxy-policy-state').textContent=policy;
+ document.getElementById('proxy-allowed-state').textContent=policy;
+}
+function saveSettings(){
+ api('PUT','/api/settings',{
+  listen:document.getElementById('set-listen').value,
+  http:document.getElementById('set-http').value,
+  https:document.getElementById('set-https').value,
+  tls_cert_file:document.getElementById('set-cert').value,
+  tls_key_file:document.getElementById('set-key').value,
+  portal_host:document.getElementById('set-portal-host').value,
+  portal_ip:document.getElementById('set-portal-ip').value,
+  blocklist_file:document.getElementById('set-blocklist').value,
+  cache_enabled:document.getElementById('set-cache').checked,
+  cache_size:parseInt(document.getElementById('set-cache-size').value,10)||1000,
+  cache_ttl_seconds:parseInt(document.getElementById('set-cache-ttl').value,10)||300,
+  resolver_disabled:document.getElementById('set-resolver-disabled').checked,
+  lan_only:document.getElementById('set-lan').checked,
+  whitelist_only:document.getElementById('set-whitelist-only').checked,
+  whitelist:document.getElementById('set-whitelist').value.split(',').map(function(s){return s.trim();}).filter(Boolean),
+  direct_override:document.getElementById('set-direct-override').checked,
+  direct_override_to:document.getElementById('set-direct-to').value,
+  troll_mode:document.getElementById('set-troll').checked,
+  troll_hosts:splitLines(document.getElementById('set-troll-hosts').value),
+  http_proxy_enabled:document.getElementById('set-http-proxy-enabled').checked,
+  http_proxy:document.getElementById('set-http-proxy').value,
+  socks_proxy_enabled:document.getElementById('set-socks-proxy-enabled').checked,
+  socks_proxy:document.getElementById('set-socks-proxy').value
+ }).then(function(d){toast(d?'Settings saved':'Settings saved (no response)','ok');loadSettings();});
+}
+function loadCertPage(){
+ api('GET','/api/settings').then(function(d){
+  var host=d.portal_host||'dns.leaf',ip=d.portal_ip||'127.0.0.1';
+  if(!document.getElementById('cert-cn').value)document.getElementById('cert-cn').value=host;
+  if(!document.getElementById('cert-dns').value)document.getElementById('cert-dns').value=host;
+  if(!document.getElementById('cert-ips').value)document.getElementById('cert-ips').value=ip;
+  if(!document.getElementById('cert-org').value)document.getElementById('cert-org').value='DNSLeaf local';
+  if(!document.getElementById('cert-days').value)document.getElementById('cert-days').value='398';
+  if(!document.getElementById('cert-cert-path').value)document.getElementById('cert-cert-path').value=d.tls_cert_file||'certs/dnsleaf-cert.pem';
+  if(!document.getElementById('cert-key-path').value)document.getElementById('cert-key-path').value=d.tls_key_file||'certs/dnsleaf-key.pem';
+  if(!document.getElementById('cert-https').value)document.getElementById('cert-https').value=d.https||':8443';
+ });
+}
+function createCert(){
+ var body={
+  common_name:document.getElementById('cert-cn').value,
+  dns_names:document.getElementById('cert-dns').value,
+  ip_addresses:document.getElementById('cert-ips').value,
+  organization:document.getElementById('cert-org').value,
+  days:parseInt(document.getElementById('cert-days').value,10)||398,
+  key_type:document.getElementById('cert-key-type').value,
+  cert:document.getElementById('cert-cert-path').value,
+  key:document.getElementById('cert-key-path').value,
+  https:document.getElementById('cert-https').value,
+  is_ca:document.getElementById('cert-is-ca').checked,
+  apply:document.getElementById('cert-apply').checked
+ };
+ api('POST','/api/tls/selfsigned',body).then(function(r){
+  document.getElementById('cert-result').innerHTML='Created <code>'+esc(r.cert)+'</code> and <code>'+esc(r.key)+'</code>. '+(r.applied?'Restart DNSLeaf to enable HTTPS on '+esc(r.https)+'.':'Files created; settings were not changed.');
+ });
+}
+function loadServerLog(){
+ api('GET','/api/server-log').then(function(d){
+  var el=document.getElementById('serverlog');
+  if(!d||!d.length){el.textContent='No server log entries yet.';return;}
+  el.textContent=d.join('\n');
+ });
+}
+function loadUsers(){
+ api('GET','/api/users').then(function(d){
+  var tb=document.getElementById('users');
+  if(!d||!d.length){tb.innerHTML='<tr><td colspan="5" class="empty">No users configured</td></tr>';return;}
+  tb.innerHTML=d.map(function(u){
+   return '<tr><td><input class="u-name" value="'+esc(u.username)+'"></td><td><select class="u-role"><option value="viewer" '+(u.role==='viewer'?'selected':'')+'>Viewer</option><option value="admin" '+(u.role==='admin'?'selected':'')+'>Admin</option></select></td><td>'+esc(u.created_at||'')+'</td><td><input class="u-pass" type="password" placeholder="New password"></td><td><button class="sm ok" data-user="'+esc(u.username)+'" onclick="saveUser(this)">Save</button> <button class="sm dg" data-user="'+esc(u.username)+'" onclick="delUser(this)">Remove</button></td></tr>';
+  }).join('');
+ });
+}
+function addUser(){
+ var u=document.getElementById('new-user').value,p=document.getElementById('new-pass').value,r=document.getElementById('new-role').value;
+ if(!u||!p)return;
+ api('POST','/api/users',{username:u,password:p,role:r}).then(function(){document.getElementById('new-user').value='';document.getElementById('new-pass').value='';loadUsers();});
+}
+function saveUser(btn){
+ var tr=btn.closest('tr');
+ api('PATCH','/api/users',{username:btn.dataset.user,new_username:tr.querySelector('.u-name').value,role:tr.querySelector('.u-role').value,password:tr.querySelector('.u-pass').value}).then(loadUsers);
+}
+function delUser(btn){api('DELETE','/api/users',{username:btn.dataset.user}).then(loadUsers);}
+document.querySelectorAll('#tabs a[data-t]').forEach(function(a){a.addEventListener('click',function(){sw(this.dataset.t)})});
+document.getElementById('btn-login').addEventListener('click',login);
+document.getElementById('login-pass').addEventListener('keydown',function(e){if(e.key==='Enter')login();});
+document.getElementById('logout').addEventListener('click',logout);
+document.getElementById('btn-add-rec').addEventListener('click',addRec);
+document.getElementById('btn-browse-zone').addEventListener('click',browseZone);
+document.getElementById('import-file').addEventListener('change',pickedZone);
+document.getElementById('btn-import-zone').addEventListener('click',importZone);
+document.getElementById('btn-add-blk').addEventListener('click',addBlk);
+document.getElementById('btn-add-rx').addEventListener('click',addRegex);
+document.getElementById('b-dom').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addBlk();}});
+document.getElementById('blk-filter').addEventListener('input',function(){blkPage=1;renderBlk();});
+document.getElementById('blk-context').addEventListener('change',function(){blkPage=1;renderBlk();});
+document.getElementById('blk-page-size').addEventListener('change',function(){blkPage=1;renderBlk();});
+document.getElementById('blk-prev').addEventListener('click',function(){blkPage--;renderBlk();});
+document.getElementById('blk-next').addEventListener('click',function(){blkPage++;renderBlk();});
+document.getElementById('btn-reload-bl').addEventListener('click',function(){startGravity(document.getElementById('gravity-target').value)});
+document.getElementById('gravity-close').addEventListener('click',function(){document.getElementById('gravity-modal').classList.remove('show');});
+document.getElementById('btn-add-list').addEventListener('click',addList);
+document.getElementById('bl-source').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addList();}});
+document.getElementById('btn-save-group').addEventListener('click',saveGroup);
+document.getElementById('grp-name').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();saveGroup();}});
+document.getElementById('btn-add-up').addEventListener('click',addUp);
+document.getElementById('u-addr').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addUp();}});
+document.getElementById('btn-load-clients').addEventListener('click',loadClients);
+document.getElementById('btn-clear-denied-clients').addEventListener('click',clearDeniedClients);
+document.getElementById('btn-set-client-profile').addEventListener('click',assignClientProfile);
+document.getElementById('cp-ip').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();assignClientProfile();}});
+document.getElementById('btn-add-profile').addEventListener('click',addProfile);
+document.getElementById('pf-name').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addProfile();}});
+document.getElementById('btn-clear-log').addEventListener('click',function(){api('DELETE','/api/log').then(loadLg);});
+document.getElementById('log-filter').addEventListener('input',loadLg);
+document.getElementById('btn-save-settings').addEventListener('click',saveSettings);
+document.getElementById('btn-save-proxy').addEventListener('click',saveSettings);
+document.getElementById('btn-create-cert').addEventListener('click',createCert);
+document.getElementById('btn-refresh-serverlog').addEventListener('click',loadServerLog);
+document.getElementById('btn-clear-serverlog').addEventListener('click',function(){api('DELETE','/api/server-log').then(loadServerLog);});
+document.getElementById('btn-add-user').addEventListener('click',addUser);
+document.addEventListener('keydown',function(e){
+ if(e.key!=='Enter'||e.shiftKey||e.ctrlKey||e.altKey)return;
+ var t=e.target;
+ if(t.matches('.rec-host,.rec-ip,.rec-note')){e.preventDefault();saveRec(t.closest('tr').querySelector('button.ok'));}
+ if(t.matches('.list-name,.list-groups')){e.preventDefault();saveList(t.closest('tr').querySelector('button.ok'));}
+ if(t.matches('.c-name')){e.preventDefault();saveClient(t.closest('tr').querySelector('button.ok'));}
+ if(t.matches('.u-name,.u-pass')){e.preventDefault();saveUser(t.closest('tr').querySelector('button.ok'));}
+ if(t.matches('.grp-row-name')){e.preventDefault();saveGroupRow(t.closest('tr').querySelector('button.ok'));}
+ if(t.matches('.pf-row-name')){e.preventDefault();saveProfileRow(t.closest('tr').querySelector('button.ok'));}
+});
+loadRememberedLogin();
+checkSession();
+setTimeout(function(){var t=(location.hash||'').replace('#','');if(t&&document.getElementById('t-'+t))sw(t);},0);
+setInterval(function(){if(cur==='dashboard')loadSt();},3000);
+</script>
+</body></html>
