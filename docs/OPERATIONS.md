@@ -3,27 +3,33 @@
 ## First start
 
 1. Copy `config.example.json` to `config.json`.
-2. Review the DNS bind address and keep `lan_only` enabled unless every client is explicitly controlled.
+2. Review the DNS and panel bind addresses. Keep `lan_only` enabled unless every client is explicitly controlled.
 3. Start DNSLeaf and save the generated administrator password.
 4. Open the panel at the configured loopback address.
-5. Create a trusted certificate before enabling HTTPS for remote administration.
+5. Create and trust a CA-issued certificate before enabling HTTPS for remote administration.
+
+The `--no-tui` mode is suitable for a service. A normal stop signal closes DNS, HTTP, HTTPS, DoT, and proxy listeners and flushes pending query state before returning.
 
 ## Health checks
 
-Use a DNS client against the configured listener:
+Use a DNS client against both transports:
 
 ```bash
 dig @127.0.0.1 example.com
 dig +tcp @127.0.0.1 example.com
 ```
 
-Use the panel health endpoint locally:
+If DoH is enabled, send `application/dns-message` requests to `/dns-query`. The unauthenticated panel health endpoint is intended for local checks only:
 
 ```bash
 curl http://127.0.0.1:8080/api/ping
 ```
 
-The health endpoint does not authenticate and should not be exposed as a sensitive monitoring endpoint on an untrusted network.
+## Blocklists and policy changes
+
+Use the panel's Gravity action or the console's `gravity` command to refresh blocklists. Local sources are resolved relative to the configuration file. Remote sources use an HTTPS-capable client with a bounded request timeout and retain a cached copy if refresh fails.
+
+After changing records, policies, users, or listeners, confirm the success response and restart DNSLeaf when a listener address or certificate changes. Listener settings are read at startup; configuration writes do not reopen existing sockets.
 
 ## Backups and updates
 
@@ -32,11 +38,15 @@ Back up `config.json`, `stats.json`, local blocklists, and certificate material 
 After source updates, run:
 
 ```bash
+go mod verify
 go test -mod=vendor ./...
+go test -race -mod=vendor ./...
+go test -mod=mod ./...
 go vet -mod=vendor ./...
 ```
 
-The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both `-mod=vendor` and `-mod=mod` test runs before publishing a release.
+The vendored build is the reproducible offline build. Regenerate it with `go mod vendor` after dependency changes, then verify both vendor and module test runs before publishing a release.
+
 ## Linux service
 
-Run DNSLeaf under a dedicated unprivileged service account with `CAP_NET_BIND_SERVICE`, a private configuration directory, and a firewall that permits DNS only from intended clients. Do not expose the administration panel or optional proxies without an explicit access policy.
+Run DNSLeaf under a dedicated unprivileged service account with `CAP_NET_BIND_SERVICE`, a private configuration directory, and a firewall that permits DNS only from intended clients. The service installer derives `WorkingDirectory`, `ExecStart`, and `--config` from the selected executable and configuration; it writes the unit to the standard systemd unit directory.

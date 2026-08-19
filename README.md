@@ -17,7 +17,7 @@ DNSLeaf is intentionally extensible beyond a basic DNS sinkhole. It is still an 
 
 ## Quick start
 
-Requirements: Go 1.26 or newer for development. A release binary can run without Go installed.
+Requirements: Go 1.25.3 or newer for development. CI also verifies the current Go 1.26.x toolchain. A release binary can run without Go installed.
 
 ```powershell
 Copy-Item config.example.json config.json
@@ -72,7 +72,9 @@ The repository includes vendored dependencies for offline builds. Validate chang
 ```bash
 go test -mod=vendor ./...
 go test -race -mod=vendor ./...
+go test -mod=mod ./...
 go vet -mod=vendor ./...
+go mod verify
 ```
 
 The repository has no parent-directory module dependencies. `vendor/` is generated from `go.mod`; verify both vendor-mode and module-mode builds when changing dependencies.

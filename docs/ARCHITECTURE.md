@@ -6,24 +6,31 @@ DNSLeaf is a single-process DNS resolver and administration service. The same pr
 
 Every DNS request follows this order:
 
-1. Validate that the message has a question.
+1. Validate that the message contains exactly one question.
 2. Resolve the built-in portal hostname.
 3. Apply resolver-disabled pass-through mode.
 4. Apply rate limiting and client access policy.
 5. Apply safe-search, override, and troll policies where configured.
 6. Apply domain and profile block/allow rules.
 7. Resolve local records.
-8. Read the response cache.
-9. Forward to an enabled upstream and inspect returned addresses.
-10. Record statistics, query history, and client state.
+8. Read the response cache and age returned TTLs.
+9. Forward to an enabled upstream over UDP, retrying truncated responses over TCP.
+10. Inspect returned addresses for blocked IPs.
+11. Record statistics, query history, and client state.
 
-UDP and TCP DNS use the miekg/dns server. DNS-over-HTTPS enters through `/dns-query` and feeds the same resolver path. DNS-over-TLS uses the configured certificate and the same DNS handler.
+UDP and TCP DNS use the miekg/dns server. DNS-over-HTTPS enters through `/dns-query` and feeds the same resolver path. DNS-over-TLS uses the configured certificate and the same DNS handler. Optional HTTP and SOCKS proxy listeners are independent transports that reuse client access policy.
 
 ## State ownership
 
 The configuration file is the source of truth for users, records, policies, listeners, and upstreams. Query statistics, recent query history, and client counters are persisted separately in `stats.json`. Remote blocklist data is cached under `gravity/`.
 
-All runtime files should live beside the selected configuration file. They are local deployment state and are intentionally excluded from the public source tree.
+All configured relative paths are resolved from the selected configuration file directory. Runtime writes are serialized, debounced for high-frequency query state, and written through temporary files before replacement. Deployment state is intentionally excluded from the public source tree.
+
+## Concurrency boundaries
+
+Configuration reads and mutations use a read/write lock. Query statistics, logs, clients, sessions, policy indexes, cache entries, upstream health, gravity progress, and login throttling each have their own synchronization boundary. A single background persistence worker coalesces state-save requests and performs a final flush during shutdown.
+
+HTTP servers have bounded header, read, write, and idle timeouts. Shutdown closes registered DNS/HTTP servers and proxy listeners, waits up to the graceful-shutdown window, stops the console, and flushes state.
 
 ## Policy boundaries
 
