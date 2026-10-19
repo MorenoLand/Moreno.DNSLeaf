@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -10,8 +12,38 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// proxyDialer refuses loopback, link-local, unspecified and multicast destinations so an allowed proxy
+// client cannot reach services bound to the DNSLeaf host itself (admin panel, metadata endpoints).
+// The check runs on the resolved address, so DNS names pointing at such addresses are rejected too.
+var proxyDialer = &net.Dialer{
+	Timeout:   15 * time.Second,
+	KeepAlive: 30 * time.Second,
+	Control: func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
+			return fmt.Errorf("proxy destination %s is not permitted", host)
+		}
+		return nil
+	},
+}
+
+var proxyOutboundTransport = &http.Transport{
+	Proxy: nil,
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return proxyDialer.DialContext(ctx, network, addr)
+	},
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+}
 
 func (d *DNSLeaf) serveHTTPProxy(addr string) error {
 	srv := newHTTPServer(addr, http.HandlerFunc(d.handleHTTPProxy), log.New(serverLogWriter{dad: d}, "", 0))
@@ -52,7 +84,7 @@ func (d *DNSLeaf) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	target.Header.Del("Proxy-Connection")
 	target.Header.Del("Proxy-Authenticate")
 	target.Header.Del("Proxy-Authorization")
-	resp, err := proxyTransport.RoundTrip(target)
+	resp, err := proxyOutboundTransport.RoundTrip(target)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -69,7 +101,7 @@ func (d *DNSLeaf) handleHTTPConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hijack unavailable", http.StatusInternalServerError)
 		return
 	}
-	target, err := net.DialTimeout("tcp", ensurePort(r.Host, "443"), 15*time.Second)
+	target, err := proxyDialer.Dial("tcp", ensurePort(r.Host, "443"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -157,7 +189,7 @@ func (d *DNSLeaf) handleSOCKSConn(conn net.Conn) {
 		return
 	}
 	port := int(pb[0])<<8 | int(pb[1])
-	target, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 15*time.Second)
+	target, err := proxyDialer.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		conn.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 		return

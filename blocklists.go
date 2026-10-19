@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,7 +48,15 @@ func (d *DNSLeaf) readBlocklistSource(source string, forceRemote bool) ([]byte, 
 			}
 		}
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+			return errors.New("refusing https to http redirect")
+		}
+		return nil
+	}}
 	resp, err := client.Get(source)
 	if err != nil {
 		if data, readErr := os.ReadFile(cachePath); readErr == nil {

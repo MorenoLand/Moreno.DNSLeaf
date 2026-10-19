@@ -183,6 +183,18 @@ func (d *DNSLeaf) configGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == "/api/login" {
+			// Login and logout never mutate configuration. Holding the write lock here would let
+			// unauthenticated PBKDF2 attempts stall DNS resolution and force a config save per login.
+			if r.Header.Get("X-DNSLeaf-Request") != "1" {
+				http.Error(w, "missing X-DNSLeaf-Request header", http.StatusForbidden)
+				return
+			}
+			d.cfgMu.RLock()
+			defer d.cfgMu.RUnlock()
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Header.Get("X-DNSLeaf-Request") != "1" {
 			http.Error(w, "missing X-DNSLeaf-Request header", http.StatusForbidden)
 			return
